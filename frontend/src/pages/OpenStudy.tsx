@@ -61,7 +61,7 @@ const OpenStudy: React.FC = () => {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [selectedField, setSelectedField] = useState<string>("");
 
-  // ✅ 페이지네이션 상태
+  // 페이지네이션 상태
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
   const [totalElements, setTotalElements] = useState(0);
@@ -92,39 +92,57 @@ const OpenStudy: React.FC = () => {
     }
   }, [user]);
 
-  // ✅ 페이지네이션 적용된 방 목록 로드
+  // 페이지네이션 적용된 방 목록 로드
   const loadRooms = async (studyField?: string, page: number = 1) => {
     setLoading(true);
     try {
       const response = await openStudyAPI.getRooms(studyField, page);
-      console.log("OpenStudy API Response:", response);
 
-      // ✅ PageResponse 구조 처리
-      if (response && response.content) {
-        const roomsData = response.content.map((room) => ({
+      // 실제 API 응답 구조 처리
+      const responseData = (response as any)?.data || response;
+      
+      // PageResponse 구조 처리
+      if (responseData && responseData.content) {
+        const roomsData = responseData.content.map((room: any) => ({
           ...room,
-          title: room.title || (room as any).roomName || "",
+          title: room.title || room.roomName || "",
         }));
 
         setRooms(roomsData);
-        setCurrentPage(response.currentPage);
-        setTotalPages(response.totalPages);
-        setTotalElements(response.totalElements);
-      } else {
-        // ✅ 이전 버전 호환 (배열 응답)
-        const roomsData = Array.isArray(response)
-          ? response.map((room) => ({
-              ...room,
-              title: room.title || (room as any).roomName || "",
-            }))
-          : [];
+        setCurrentPage(responseData.currentPage || responseData.page || 1);
+        setTotalPages(responseData.totalPages || 1);
+        setTotalElements(responseData.totalElements || roomsData.length);
+      } 
+      // 배열로 직접 온 경우
+      else if (Array.isArray(responseData)) {
+        const roomsData = responseData.map((room: any) => ({
+          ...room,
+          title: room.title || room.roomName || "",
+        }));
         setRooms(roomsData);
         setCurrentPage(1);
         setTotalPages(1);
         setTotalElements(roomsData.length);
       }
+      // 단일 객체인 경우 배열로 래핑
+      else if (responseData && typeof responseData === 'object' && responseData.id) {
+        const roomsData = [responseData].map((room: any) => ({
+          ...room,
+          title: room.title || room.roomName || "",
+        }));
+        setRooms(roomsData);
+        setCurrentPage(1);
+        setTotalPages(1);
+        setTotalElements(1);
+      }
+      else {
+        setRooms([]);
+        setCurrentPage(1);
+        setTotalPages(0);
+        setTotalElements(0);
+      }
     } catch (error) {
-      console.error("loadRooms error:", error);
+      console.error("Failed to load rooms:", error);
       toast({
         title: "오류",
         description: "스터디 방 목록을 불러오는데 실패했습니다.",
@@ -135,14 +153,14 @@ const OpenStudy: React.FC = () => {
     setLoading(false);
   };
 
-  // ✅ 필터 변경 핸들러 - 첫 페이지로 리셋
+  // 필터 변경 핸들러 - 첫 페이지로 리셋
   const handleFilterChange = (field: string) => {
     setSelectedField(field);
     setCurrentPage(1);
     loadRooms(field || undefined, 1);
   };
 
-  // ✅ 페이지 변경 핸들러
+  // 페이지 변경 핸들러
   const handlePageChange = (newPage: number) => {
     if (newPage < 1 || newPage > totalPages) return;
     setCurrentPage(newPage);
@@ -195,32 +213,32 @@ const OpenStudy: React.FC = () => {
         maxParticipants: newRoom.maxParticipants,
       });
 
-      console.log("Create room response:", response);
-
-      // ✅ API 응답 구조에 따라 ID 추출 (타입 단언)
+      // API 응답 구조에 따라 ID 추출
       const responseObj = response as any;
       const roomId =
-        response?.id || responseObj?.roomId || responseObj?.data?.id;
+        response?.id || 
+        responseObj?.roomId || 
+        responseObj?.data?.id ||
+        responseObj?.data?.roomId;
 
       if (!roomId) {
-        console.error("Created room has no ID:", response);
         toast({
           title: "오류",
-          description:
-            "방 생성은 완료되었으나 ID를 받지 못했습니다. 목록을 새로고침합니다.",
+          description: "방 생성은 완료되었으나 ID를 받지 못했습니다. 목록을 새로고침합니다.",
           variant: "destructive",
         });
-        loadRooms(selectedField || undefined);
+        setSelectedField("");
+        await loadRooms(undefined, 1);
         setCreateDialogOpen(false);
         setLoading(false);
         return;
       }
 
-      // ✅ 생성된 방 정보 구성 (title과 roomName 모두 저장)
+      // 생성된 방 정보 구성
       const roomData: OpenStudyRoom = {
         id: roomId,
         title: newRoom.title,
-        roomName: newRoom.title, // ✅ 백엔드 호환성
+        roomName: newRoom.title,
         description: newRoom.description,
         studyField: newRoom.studyField,
         maxParticipants: newRoom.maxParticipants,
@@ -232,12 +250,12 @@ const OpenStudy: React.FC = () => {
         ...response,
       };
 
-      localStorage.setItem("currentOpenStudyRoom", JSON.stringify(roomData));
+      localStorage.setItem("currentOpenStudyRoom", roomId);
       setCurrentRoom(roomData);
 
       toast({
-        title: "성공",
-        description: "스터디 방이 생성되었습니다.",
+        title: "방 생성 성공",
+        description: `"${newRoom.title}" 방이 생성되었습니다.`,
       });
 
       setCreateDialogOpen(false);
@@ -248,8 +266,9 @@ const OpenStudy: React.FC = () => {
         maxParticipants: 4,
       });
 
-      // 오픈 스터디룸 페이지로 이동
+      // 방으로 바로 이동
       navigate(`/open-study/room/${roomId}`);
+      
     } catch (error: any) {
       const errorMessage = error?.message || "스터디 방 생성에 실패했습니다.";
       toast({
@@ -277,10 +296,7 @@ const OpenStudy: React.FC = () => {
 
       const joinedRoom = rooms.find((r) => r.id === roomId);
       if (joinedRoom) {
-        localStorage.setItem(
-          "currentOpenStudyRoom",
-          JSON.stringify(joinedRoom)
-        );
+        localStorage.setItem("currentOpenStudyRoom", roomId.toString());
         setCurrentRoom(joinedRoom);
       }
 
@@ -289,7 +305,6 @@ const OpenStudy: React.FC = () => {
         description: "스터디 방에 참여했습니다.",
       });
 
-      // 오픈 스터디룸 페이지로 이동
       navigate(`/open-study/room/${roomId}`);
     } catch (error: any) {
       console.error("Join room error:", error);
@@ -302,13 +317,11 @@ const OpenStudy: React.FC = () => {
           let currentRoomData = currentRoom;
 
           if (!currentRoomData) {
-            const savedRoom = localStorage.getItem("currentOpenStudyRoom");
-            if (savedRoom) {
-              try {
-                currentRoomData = JSON.parse(savedRoom);
-              } catch (e) {
-                console.error("Failed to parse saved room:", e);
-                localStorage.removeItem("currentOpenStudyRoom");
+            const savedRoomId = localStorage.getItem("currentOpenStudyRoom");
+            if (savedRoomId) {
+              const savedRoomData = rooms.find((r) => r.id === parseInt(savedRoomId));
+              if (savedRoomData) {
+                currentRoomData = savedRoomData;
               }
             }
           }
@@ -331,7 +344,6 @@ const OpenStudy: React.FC = () => {
 
             if (shouldLeave) {
               await openStudyAPI.leaveRoom(currentRoomData.id);
-
               localStorage.removeItem("currentOpenStudyRoom");
               setCurrentRoom(null);
 
@@ -339,10 +351,7 @@ const OpenStudy: React.FC = () => {
 
               const newJoinedRoom = rooms.find((r) => r.id === roomId);
               if (newJoinedRoom) {
-                localStorage.setItem(
-                  "currentOpenStudyRoom",
-                  JSON.stringify(newJoinedRoom)
-                );
+                localStorage.setItem("currentOpenStudyRoom", roomId.toString());
                 setCurrentRoom(newJoinedRoom);
               }
 
@@ -356,8 +365,7 @@ const OpenStudy: React.FC = () => {
           } else {
             toast({
               title: "안내",
-              description:
-                "이미 다른 스터디룸에 참여 중입니다. 먼저 현재 방을 나간 후 다시 시도해주세요.",
+              description: "이미 다른 스터디룸에 참여 중입니다. 먼저 현재 방을 나간 후 다시 시도해주세요.",
               variant: "destructive",
             });
           }
@@ -622,7 +630,7 @@ const OpenStudy: React.FC = () => {
           </Card>
         )}
 
-        {/* ✅ 필터 섹션 추가 */}
+        {/* 필터 섹션 */}
         <div className="mb-6">
           <Label className="mb-2 block">공부 분야 필터</Label>
           <div className="flex gap-2 flex-wrap">
@@ -742,7 +750,7 @@ const OpenStudy: React.FC = () => {
                 ))}
               </div>
 
-              {/* ✅ 페이지네이션 UI */}
+              {/* 페이지네이션 UI */}
               {totalPages > 1 && (
                 <div className="flex justify-center items-center gap-2 mt-6">
                   <Button
@@ -758,7 +766,6 @@ const OpenStudy: React.FC = () => {
                   <div className="flex gap-1">
                     {Array.from({ length: totalPages }, (_, i) => i + 1)
                       .filter((page) => {
-                        // 현재 페이지 기준 앞뒤 2페이지씩만 표시
                         return (
                           page === 1 ||
                           page === totalPages ||
@@ -766,7 +773,6 @@ const OpenStudy: React.FC = () => {
                         );
                       })
                       .map((page, idx, arr) => {
-                        // ... 표시 (페이지 건너뛰는 경우)
                         if (idx > 0 && page - arr[idx - 1] > 1) {
                           return (
                             <React.Fragment key={`ellipsis-${page}`}>

@@ -152,6 +152,14 @@ export interface RegisterRequest {
   checkPw: boolean;
 }
 
+// ✅ 오픈 스터디룸 참여자 타입 (백엔드 ParticipantResponseDto와 일치)
+export interface OpenStudyParticipant {
+  memberId: number;
+  nickname: string;
+  profileImage?: string;
+  timerStatus: 'STUDYING' | 'RESTING'; // ✅ PersonalTimer가 없으면 기본값 RESTING 반환
+}
+
 // ✅ 오픈 스터디룸 타입 (백엔드 스키마 기준)
 export interface OpenStudyRoom {
   id: number;
@@ -166,6 +174,7 @@ export interface OpenStudyRoom {
   createdAt?: string;
   isActive?: boolean;
   createdBy?: string;
+  participants?: OpenStudyParticipant[]; // ✅ 참여자 목록
 }
 
 // ✅ 페이지네이션 응답 타입
@@ -390,6 +399,14 @@ export const openStudyAPI = {
 
   // ✅ GET /api/open-study/study-fields
   getStudyFields: () => apiClient.get<string[]>("/api/open-study/study-fields"),
+
+  // ✅ GET /api/open-study/rooms/{roomId}/participants
+  // 참여자 목록 조회 - PersonalTimer와 Member 정보를 결합하여 반환
+  // 타이머가 없는 경우 기본값 RESTING으로 설정됨
+  getParticipants: (roomId: string | number) =>
+    apiClient.get<OpenStudyParticipant[]>(
+      `/api/open-study/rooms/${roomId}/participants`
+    ),
 };
 
 // 📚 그룹 스터디룸 관련
