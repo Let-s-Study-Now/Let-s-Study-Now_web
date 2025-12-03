@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -20,12 +21,21 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { toast } from "@/hooks/use-toast";
-import {
-  openStudyAPI,
-  OpenStudyRoom,
-  sessionAPI,
+import { 
+  openStudyAPI, 
+  OpenStudyRoom, 
+  sessionAPI, 
+  SessionStartRequestDto,
+  SessionEndResultDto,
   LevelInfoDto,
+  chatAPI,
+  ChatMessage as APIChatMessage,
 } from "@/lib/api";
+import {
+  webSocketService,
+  WebSocketMessage,
+  MessageType,
+} from "@/lib/websocket";
 import {
   Users,
   Clock,
@@ -48,9 +58,11 @@ import {
 } from "lucide-react";
 
 interface ChatMessage {
-  id: string;
-  type: "text" | "image" | "file" | "system" | "question";
-  sender?: string;
+  id: number;
+  type: MessageType;
+  sender: string;
+  senderId?: number;
+  senderProfileImage?: string;
   content: string;
   imageUrl?: string;
   fileName?: string;
@@ -58,6 +70,8 @@ interface ChatMessage {
   timestamp: Date;
   answers?: HelpAnswer[];
   status?: "open" | "helping" | "resolved";
+  refId?: number;
+  isSolved?: boolean;
 }
 
 interface Participant {
@@ -68,8 +82,10 @@ interface Participant {
 }
 
 interface HelpAnswer {
-  id: string;
+  id: number;
   answerer: string;
+  answererId?: number;
+  answererProfileImage?: string;
   content: string;
   timestamp: Date;
   isAccepted?: boolean;
@@ -79,9 +95,9 @@ const OpenStudyRoomPage: React.FC = () => {
   const { user } = useAuth();
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
-
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const helpFileInputRef = useRef<HTMLInputElement>(null);
   const hasJoinedRef = useRef(false);
   const isLeavingRef = useRef(false);
 
@@ -96,16 +112,16 @@ const OpenStudyRoomPage: React.FC = () => {
   // My Status
   const [myStatus, setMyStatus] = useState<"studying" | "resting">("studying");
 
-  // Session
+  // Session - 백엔드 연동
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(0);
   const intervalRef = useRef<any>(null);
-
+  
   // Level Info
   const [levelInfo, setLevelInfo] = useState<LevelInfoDto | null>(null);
 
-  // Today Stats
+  // Today's Stats
   const [todayStats, setTodayStats] = useState({
     totalStudyTime: 0,
     studySessions: 0,
@@ -120,8 +136,8 @@ const OpenStudyRoomPage: React.FC = () => {
   const [questionImage, setQuestionImage] = useState<string | null>(null);
   const [questionFileName, setQuestionFileName] = useState<string | null>(null);
 
-  // Answer inputs
-  const [answerInputs, setAnswerInputs] = useState<Record<string, string>>({});
+  // Answer input for specific question
+  const [answerInputs, setAnswerInputs] = useState<Record<number, string>>({});
 
   // Question list popover
   const [questionListOpen, setQuestionListOpen] = useState(false);
@@ -130,7 +146,7 @@ const OpenStudyRoomPage: React.FC = () => {
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
 
-  // 시간 포맷
+  // 시간 포맷 함수
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -146,6 +162,7 @@ const OpenStudyRoomPage: React.FC = () => {
       .padStart(2, "0")}`;
   };
 
+  // 상대적 시간 표시
   const formatRelativeTime = (date: Date) => {
     const now = new Date();
     const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
@@ -161,34 +178,34 @@ const OpenStudyRoomPage: React.FC = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 레벨 정보
+  // 레벨 정보 조회
   useEffect(() => {
     const fetchLevelInfo = async () => {
-      if (!user) return;
       try {
         const info = await sessionAPI.getLevelInfo();
         setLevelInfo(info);
-      } catch (e) {
-        console.error("Failed to fetch level info:", e);
+      } catch (error) {
+        console.error("Failed to fetch level info:", error);
       }
     };
-    fetchLevelInfo();
+
+    if (user) {
+      fetchLevelInfo();
+    }
   }, [user]);
 
-  // 타이머
+  // 타이머 실시간 UI 업데이트 - myStatus에 따라 작동
   useEffect(() => {
+    // 기존 interval 정리
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
 
+    // "공부중" 상태일 때만 타이머 시작
     if (myStatus === "studying") {
       intervalRef.current = setInterval(() => {
-        setCurrentSeconds((prev) => prev + 1);
-        setTodayStats((prev) => ({
-          ...prev,
-          totalStudyTime: prev.totalStudyTime + 1,
-        }));
+        setCurrentSeconds((prevSeconds) => prevSeconds + 1);
       }, 1000);
     }
 
@@ -200,140 +217,313 @@ const OpenStudyRoomPage: React.FC = () => {
     };
   }, [myStatus]);
 
-  // ---------- 방 입장 로직 (비방장 새로고침 시 튕김 방지) ----------
+  // WebSocket 메시지 수신 처리
+  const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
+    console.log("📩 WebSocket message received:", wsMessage);
+
+    const messageId = wsMessage.id || wsMessage.messageId || 0;
+
+    const newMessage: ChatMessage = {
+      id: messageId,
+      type: wsMessage.type,
+      sender: wsMessage.sender,
+      senderId: undefined,
+      senderProfileImage: undefined,
+      content: wsMessage.message,
+      imageUrl: wsMessage.imageUrl,
+      timestamp: new Date(wsMessage.sentAt),
+      refId: wsMessage.refId,
+      isSolved: wsMessage.isSolved,
+    };
+
+    if (wsMessage.type === "QUESTION") {
+      newMessage.status = "open";
+      newMessage.answers = [];
+      console.log("➕ Adding QUESTION message:", newMessage);
+      setMessages((prev) => [...prev, newMessage]);
+      
+    } else if (wsMessage.type === "ANSWER") {
+      console.log("💬 ANSWER received:", {
+        id: messageId,
+        refId: wsMessage.refId,
+        sender: wsMessage.sender,
+        message: wsMessage.message,
+      });
+
+      if (!wsMessage.refId) {
+        console.error("❌ ANSWER has no refId!");
+        return;
+      }
+
+      setMessages((prev) => {
+        const updated = prev.map((msg) => {
+          if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
+            console.log("✅ Found matching QUESTION:", msg.id);
+
+            const newAnswer: HelpAnswer = {
+              id: messageId,
+              answerer: wsMessage.sender,
+              answererId: undefined,
+              answererProfileImage: undefined,
+              content: wsMessage.message,
+              timestamp: new Date(wsMessage.sentAt),
+              isAccepted: false,
+            };
+
+            console.log("➕ Adding answer to question:", newAnswer);
+
+            return {
+              ...msg,
+              answers: [...(msg.answers || []), newAnswer],
+              status: "helping" as const,
+            };
+          }
+          return msg;
+        });
+
+        console.log("📦 Updated messages:", updated);
+        return updated;
+      });
+      
+    } else if (wsMessage.type === "SOLVE") {
+      console.log("✅ SOLVE message received:", wsMessage);
+
+      if (wsMessage.refId) {
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
+              console.log("✅ Marking question as SOLVED:", msg.id);
+              return {
+                ...msg,
+                status: "resolved" as const,
+                isSolved: true,
+              };
+            }
+            return msg;
+          })
+        );
+      }
+      
+      addSystemMessage(wsMessage.message);
+      
+    } else if (wsMessage.type === "SYSTEM") {
+      addSystemMessage(wsMessage.message);
+      
+    } else {
+      console.log("➕ Adding TALK message:", newMessage);
+      setMessages((prev) => [...prev, newMessage]);
+    }
+  };
+
+  // 채팅 내역 불러오기
+  const loadChatHistory = async (roomIdNum: number) => {
+    try {
+      const response = await chatAPI.getChatHistory(roomIdNum, "OPEN", 0);
+      
+      console.log("📦 Chat history response:", response);
+      
+      if (!Array.isArray(response)) {
+        console.warn("⚠️ Chat history is not an array:", response);
+        setMessages([]);
+        return;
+      }
+      
+      if (response.length === 0) {
+        console.log("✅ No chat history found");
+        setMessages([]);
+        return;
+      }
+      
+      const loadedMessages: ChatMessage[] = response.map((apiMsg) => {
+        const baseMessage: ChatMessage = {
+          id: apiMsg.id,
+          type: apiMsg.type,
+          sender: apiMsg.sender,
+          senderId: undefined,
+          senderProfileImage: undefined,
+          content: apiMsg.message,
+          imageUrl: apiMsg.imageUrl,
+          timestamp: new Date(apiMsg.sentAt),
+          refId: apiMsg.refId,
+          isSolved: apiMsg.isSolved,
+        };
+
+        if (apiMsg.type === "QUESTION") {
+          baseMessage.status = apiMsg.isSolved ? "resolved" : "open";
+          baseMessage.answers = [];
+        }
+
+        return baseMessage;
+      });
+
+      loadedMessages.forEach((msg) => {
+        if (msg.type === "ANSWER" && msg.refId) {
+          const questionMsg = loadedMessages.find(
+            (m) => m.id === msg.refId && m.type === "QUESTION"
+          );
+          if (questionMsg) {
+            const answer: HelpAnswer = {
+              id: msg.id,
+              answerer: msg.sender,
+              answererId: undefined,
+              answererProfileImage: undefined,
+              content: msg.content,
+              timestamp: msg.timestamp,
+            };
+            if (!questionMsg.answers) questionMsg.answers = [];
+            questionMsg.answers.push(answer);
+            if (questionMsg.answers.length > 0 && !questionMsg.isSolved) {
+              questionMsg.status = "helping";
+            }
+          }
+        }
+      });
+
+      const filteredMessages = loadedMessages.filter(
+        (msg) => msg.type !== "ANSWER"
+      );
+
+      setMessages(filteredMessages);
+      console.log("✅ Chat history loaded:", filteredMessages.length, "messages");
+    } catch (error) {
+      console.error("❌ Failed to load chat history:", error);
+      setMessages([]);
+    }
+  };
+
+  // ✅ 방 입장 로직 개선 - 새로고침 처리 강화
   useEffect(() => {
     if (!user || !roomId || hasJoinedRef.current) return;
-
-    // 이 유저가 이 방에 이미 입장한 적이 있는지 확인하는 키
-    const joinedKey = user.id
-      ? `openStudy_joined_${roomId}_${user.id}`
-      : null;
 
     const joinRoom = async () => {
       try {
         setLoading(true);
-        console.log("Attempting to join room:", roomId);
+        console.log("🚪 Attempting to join room:", roomId);
 
-        // 1) 방 정보 조회
+        // 1. 방 정보 조회
         let roomData: OpenStudyRoom;
         try {
           roomData = await openStudyAPI.getRoom(roomId);
-          console.log("Room data loaded:", roomData);
+          console.log("✅ Room data loaded:", roomData);
           setRoomInfo(roomData);
+
+          // 초기 참여자 목록 설정 (방장만)
+          setParticipants([
+            {
+              id: "creator",
+              username: roomData.creatorUsername || "방장",
+              status: "studying",
+              isCreator: true,
+            },
+          ]);
         } catch (error: any) {
-          console.error("Failed to get room info:", error);
+          console.error("❌ Failed to get room info:", error);
           toast({
             title: "오류",
             description: "방 정보를 불러올 수 없습니다.",
             variant: "destructive",
           });
-          setLoading(false);
           navigate("/open-study");
           return;
         }
 
-        // 방장 여부
+        // 2. 방장 여부 확인
         const isCreator =
           roomData.creatorUsername === user.username ||
           (roomData.createdBy && roomData.createdBy === user.id);
 
-        // 이미 이 방에 들어온 적 있는지 (새로고침 판단용)
-        const alreadyJoined =
-          !!joinedKey && localStorage.getItem(joinedKey) === "true";
+        console.log("👤 User role:", isCreator ? "방장" : "참여자");
 
-        console.log("Join check:", {
-          isCreator,
-          alreadyJoined,
-          joinedKey,
-        });
-
-        // 2) 참여자 UI 기본 세팅
-        const baseParticipants: Participant[] = [
-          {
-            id: "creator",
-            username: roomData.creatorUsername || "방장",
-            status: "studying",
-            isCreator: true,
-          },
-        ];
+        // 3. 비방장만 입장 API 호출 (방장은 이미 입장되어 있음)
         if (!isCreator) {
-          baseParticipants.push({
-            id: user.id?.toString() || "me",
-            username: user.username,
-            status: "studying",
-            isCreator: false,
-          });
-        }
-        setParticipants(baseParticipants);
-
-        // 3) 비방장 & 처음 입장일 때만 join API 호출
-        if (!isCreator && !alreadyJoined) {
           try {
             await openStudyAPI.joinRoom(roomId);
-            console.log("Successfully joined room via API");
+            console.log("✅ Successfully joined room via API");
           } catch (joinError: any) {
-            const msg = joinError?.message || "";
-            console.error("[openStudyAPI.joinRoom] error:", msg);
+            const errorMsg = String(joinError?.message || "");
+            console.warn("⚠️ Join room API error:", errorMsg);
 
-            // 410: 곧 삭제될 방 -> 진짜 입장 실패
-            const isClosingError =
-              msg.includes("곧 삭제될") ||
-              msg.includes("410") ||
-              msg.toLowerCase().includes("closing");
-
-            if (isClosingError) {
-              toast({
-                title: "입장 실패",
-                description: "곧 삭제될 방입니다. 다른 방을 이용해 주세요.",
-                variant: "destructive",
-              });
-              throw joinError; // 바깥 catch로 던져서 목록으로 이동
-            }
-
-            // 409 or '이미 ~ 참여 중' 은 "이미 이 방(또는 다른 방)에 참여 중" 상태
+            // 이미 참여 중인 경우 (409, "이미", "already" 등)
             const isAlreadyJoinedError =
-              msg.includes("이미") ||
-              msg.toLowerCase().includes("already") ||
-              msg.includes("409");
+              errorMsg.includes("409") ||
+              errorMsg.includes("이미") ||
+              errorMsg.toLowerCase().includes("already");
 
             if (isAlreadyJoinedError) {
-              console.log(
-                "[openStudyAPI.joinRoom] Already joined room, ignore error."
-              );
+              console.log("ℹ️ Already joined - treating as success (refresh scenario)");
+              // 에러를 무시하고 계속 진행 (새로고침 시나리오)
             } else {
-              // 그 외 에러는 진짜 에러
+              // 진짜 에러 (방이 삭제됨, 정원 초과 등)
+              console.error("❌ Real join error:", errorMsg);
               throw joinError;
             }
           }
-        } else {
-          console.log("Skip joinRoom call (creator or alreadyJoined)");
+
+          // 비방장 자신을 참여자 목록에 추가
+          setParticipants((prev) => [
+            ...prev,
+            {
+              id: user.id?.toString() || "me",
+              username: user.username,
+              status: "studying",
+              isCreator: false,
+            },
+          ]);
         }
 
-        // 4) 세션 시작 (에러 나도 방 입장은 유지)
+        // 4. WebSocket 연결
+        const roomIdNum = parseInt(roomId, 10);
+        webSocketService.connect(
+          () => {
+            console.log("🔌 WebSocket connected successfully");
+            loadChatHistory(roomIdNum);
+            webSocketService.subscribe(roomIdNum, "OPEN", handleWebSocketMessage);
+          },
+          (error) => {
+            console.error("❌ WebSocket connection failed:", error);
+            toast({
+              title: "연결 오류",
+              description: "채팅 서버 연결에 실패했습니다.",
+              variant: "destructive",
+            });
+          }
+        );
+
+        // 5. 스터디 세션 시작
         try {
-          const roomIdNum = parseInt(roomId, 10);
           if (!isNaN(roomIdNum)) {
+            console.log("⏱️ Starting session...");
             const sessionResponse = await sessionAPI.startSession({
               studyType: "OPEN_STUDY",
               roomId: roomIdNum,
             });
-            console.log("Session API response:", sessionResponse);
+            console.log("✅ Session started:", sessionResponse);
+
             setSessionId(sessionResponse.sessionId);
             setIsSessionActive(true);
             setCurrentSeconds(0);
           }
         } catch (sessionError: any) {
-          console.error("Failed to start session:", sessionError);
+          const sessionMsg = String(sessionError?.message || "");
+          console.warn("⚠️ Session start error:", sessionMsg);
+
+          // 이미 활성 세션이 있는 경우
+          const isActiveSessionError =
+            sessionMsg.includes("이미") ||
+            sessionMsg.toLowerCase().includes("already active");
+
+          if (isActiveSessionError) {
+            console.log("ℹ️ Already has active session - continuing...");
+            // 세션 에러를 무시하고 계속 진행
+          } else {
+            console.warn("⚠️ Session error (non-critical):", sessionError);
+            // 세션 시작 실패해도 방 입장은 유지
+          }
         }
 
-        // 5) 로컬 상태 기록
+        // 6. 로컬 저장소에 현재 방 ID 저장
         localStorage.setItem("currentOpenStudyRoom", roomId);
-        if (!isCreator && joinedKey) {
-          localStorage.setItem(joinedKey, "true");
-        }
-
         hasJoinedRef.current = true;
-        addSystemMessage(`${user.username}님이 입장했습니다.`);
 
         toast({
           title: "입장 완료",
@@ -342,17 +532,7 @@ const OpenStudyRoomPage: React.FC = () => {
 
         setLoading(false);
       } catch (error: any) {
-        console.error("Failed to join room:", error);
-
-        const joinedKeyToClear =
-          user?.id && roomId
-            ? `openStudy_joined_${roomId}_${user.id}`
-            : null;
-
-        localStorage.removeItem("currentOpenStudyRoom");
-        if (joinedKeyToClear) {
-          localStorage.removeItem(joinedKeyToClear);
-        }
+        console.error("❌ Failed to join room:", error);
 
         toast({
           title: "입장 실패",
@@ -360,75 +540,70 @@ const OpenStudyRoomPage: React.FC = () => {
           variant: "destructive",
         });
 
+        // 실패 시 로컬 저장소 정리
+        localStorage.removeItem("currentOpenStudyRoom");
         setLoading(false);
         navigate("/open-study");
       }
     };
 
     joinRoom();
+
+    // Cleanup: WebSocket 연결 해제
+    return () => {
+      if (roomId && hasJoinedRef.current) {
+        const roomIdNum = parseInt(roomId, 10);
+        if (!isNaN(roomIdNum)) {
+          webSocketService.unsubscribe(roomIdNum, "OPEN");
+        }
+        webSocketService.disconnect();
+      }
+    };
   }, [user, roomId, navigate]);
 
-  // ---------- 브라우저 종료 / 언마운트 시 방 나가기 ----------
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
-        isLeavingRef.current = true;
+  // ✅ 수정된 코드 (새로고침 허용)
+useEffect(() => {
+  const handleBeforeUnload = () => {
+    if (!roomId || !hasJoinedRef.current || isLeavingRef.current) return;
 
-        const joinedKey =
-          user?.id && roomId
-            ? `openStudy_joined_${roomId}_${user.id}`
-            : null;
+    console.log("🔄 Page refresh/close detected");
 
-        localStorage.removeItem("currentOpenStudyRoom");
-        if (joinedKey) {
-          localStorage.removeItem(joinedKey);
-        }
+    // ✅ 새로고침 시에는 서버에 leave 요청 안 함 (방장/비방장 공통)
+    // 로컬 저장소만 정리
+    localStorage.removeItem("currentOpenStudyRoom");
+    
+    console.log("✅ Keeping server-side room state for refresh");
+  };
 
-        const baseURL =
-          import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
-        const url = `${baseURL}/api/open-study/rooms/${roomId}/leave`;
+  window.addEventListener("beforeunload", handleBeforeUnload);
 
-        fetch(url, {
-          method: "POST",
-          credentials: "include",
-          keepalive: true,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        }).catch((err) => console.error("Failed to leave room:", err));
-      }
-    };
+  return () => {
+    window.removeEventListener("beforeunload", handleBeforeUnload);
+    
+    // ✅ 컴포넌트 언마운트 시 (라우터 이동)에만 실제 퇴장 처리
+    if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
+      console.log("🚪 Component unmounting (route change) → calling leaveRoom");
+      leaveRoom();
+    }
+  };
+}, [roomId]);
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
-        leaveRoom();
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, user]);
-
+  // 방 나가기 함수
   const leaveRoom = async () => {
     if (!roomId || isLeavingRef.current) return;
+    
+    console.log("🚪 Leaving room:", roomId);
     isLeavingRef.current = true;
-
-    const joinedKey =
-      user?.id && roomId ? `openStudy_joined_${roomId}_${user.id}` : null;
 
     try {
       localStorage.removeItem("currentOpenStudyRoom");
-      if (joinedKey) {
-        localStorage.removeItem(joinedKey);
-      }
       await openStudyAPI.leaveRoom(roomId);
+      console.log("✅ Successfully left room");
       hasJoinedRef.current = false;
     } catch (error) {
-      console.error("Failed to leave room:", error);
+      console.error("❌ Failed to leave room:", error);
+      // 에러가 나도 로컬 상태는 정리
       localStorage.removeItem("currentOpenStudyRoom");
-      if (joinedKey) {
-        localStorage.removeItem(joinedKey);
-      }
       hasJoinedRef.current = false;
     }
   };
@@ -470,61 +645,64 @@ const OpenStudyRoomPage: React.FC = () => {
     });
   };
 
-  const handleSendMessage = () => {
-    if (!messageInput.trim()) return;
+  // 메시지 전송 (WebSocket 사용)
+  const handleSendMessage = async () => {
+    if (!messageInput.trim() || !roomId) return;
 
-    if (isQuestionMode) {
-      const newMessage: ChatMessage = {
-        id: Date.now().toString(),
-        type: "question",
-        sender: user?.username || "익명",
-        content: messageInput,
-        imageUrl: questionImage || undefined,
-        fileName: questionFileName || undefined,
-        timestamp: new Date(),
-        answers: [],
-        status: "open",
-      };
+    try {
+      const roomIdNum = parseInt(roomId, 10);
 
-      setMessages((prev) => [...prev, newMessage]);
-      addSystemMessage(
-        `${user?.username}님이 질문했습니다: "${messageInput.slice(0, 30)}..."`
-      );
+      if (isQuestionMode) {
+        // TODO: 질문 이미지 업로드 연동
+        webSocketService.sendMessage({
+          type: "QUESTION",
+          roomType: "OPEN",
+          roomId: roomIdNum,
+          message: messageInput,
+        });
 
-      setMessageInput("");
-      setIsQuestionMode(false);
-      setQuestionImage(null);
-      setQuestionFileName(null);
+        setMessageInput("");
+        setIsQuestionMode(false);
+        setQuestionImage(null);
+        setQuestionFileName(null);
 
+        toast({
+          title: "질문 등록",
+          description: "질문이 등록되었습니다. 다른 참여자들이 답변해줄 거예요!",
+        });
+      } else {
+        webSocketService.sendMessage({
+          type: "TALK",
+          roomType: "OPEN",
+          roomId: roomIdNum,
+          message: messageInput,
+        });
+
+        setMessageInput("");
+      }
+    } catch (error: any) {
+      console.error("Failed to send message:", error);
       toast({
-        title: "질문 등록",
-        description: "질문이 등록되었습니다. 다른 참여자들이 답변해줄 거예요!",
+        title: "전송 실패",
+        description: error?.message || "메시지 전송에 실패했습니다.",
+        variant: "destructive",
       });
-    } else {
-      const newMessage: ChatMessage = {
-        id: Date.now().toString(),
-        type: "text",
-        sender: user?.username || "익명",
-        content: messageInput,
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, newMessage]);
-      setMessageInput("");
     }
   };
 
   const addSystemMessage = (content: string) => {
     const newMessage: ChatMessage = {
-      id: Date.now().toString(),
-      type: "system",
+      id: Date.now(),
+      type: "SYSTEM",
+      sender: "SYSTEM",
       content,
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, newMessage]);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 이미지 업로드
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -537,22 +715,36 @@ const OpenStudyRoomPage: React.FC = () => {
       return;
     }
 
-    const imageUrl = URL.createObjectURL(file);
-
     if (isQuestionMode) {
+      const imageUrl = URL.createObjectURL(file);
       setQuestionImage(imageUrl);
       setQuestionFileName(file.name);
     } else {
-      const newMessage: ChatMessage = {
-        id: Date.now().toString(),
-        type: "image",
-        sender: user?.username || "익명",
-        content: "",
-        imageUrl,
-        timestamp: new Date(),
-      };
+      try {
+        const imageUrl = await chatAPI.uploadImage(file);
+        
+        if (roomId) {
+          const roomIdNum = parseInt(roomId, 10);
+          webSocketService.sendMessage({
+            type: "TALK",
+            roomType: "OPEN",
+            roomId: roomIdNum,
+            message: imageUrl,
+          });
+        }
 
-      setMessages((prev) => [...prev, newMessage]);
+        toast({
+          title: "이미지 전송 완료",
+          description: "이미지가 전송되었습니다.",
+        });
+      } catch (error: any) {
+        console.error("Failed to upload image:", error);
+        toast({
+          title: "업로드 실패",
+          description: error?.message || "이미지 업로드에 실패했습니다.",
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -569,73 +761,93 @@ const OpenStudyRoomPage: React.FC = () => {
       return;
     }
 
-    const newMessage: ChatMessage = {
-      id: Date.now().toString(),
-      type: "file",
-      sender: user?.username || "익명",
-      content: "",
-      fileName: file.name,
-      fileSize: file.size,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, newMessage]);
+    toast({
+      title: "준비중",
+      description: "파일 업로드 기능은 준비중입니다.",
+    });
   };
 
-  const handleSubmitAnswer = (questionId: string) => {
+  // 답변 제출 (WebSocket 사용)
+  const handleSubmitAnswer = (questionId: number) => {
+    console.log("🔍 handleSubmitAnswer called with questionId:", questionId);
+    
     const answerText = answerInputs[questionId];
-    if (!answerText?.trim()) return;
+    console.log("🔍 answerText:", answerText);
+    
+    if (!answerText?.trim() || !roomId) {
+      console.log("❌ Validation failed:", { answerText, roomId });
+      return;
+    }
 
-    const newAnswer: HelpAnswer = {
-      id: Date.now().toString(),
-      answerer: user?.username || "익명",
-      content: answerText,
-      timestamp: new Date(),
-    };
+    try {
+      const roomIdNum = parseInt(roomId, 10);
 
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.id === questionId && msg.type === "question"
-          ? {
-              ...msg,
-              answers: [...(msg.answers || []), newAnswer],
-              status: "helping" as const,
-            }
-          : msg
-      )
-    );
+      console.log("📤 Sending ANSWER with refId:", questionId);
 
-    setAnswerInputs((prev) => ({ ...prev, [questionId]: "" }));
+      webSocketService.sendMessage({
+        type: "ANSWER",
+        roomType: "OPEN",
+        roomId: roomIdNum,
+        message: answerText,
+        refId: questionId,
+      });
 
-    toast({
-      title: "답변 등록",
-      description: "답변이 등록되었습니다!",
-    });
+      setAnswerInputs((prev) => ({ ...prev, [questionId]: "" }));
+
+      toast({
+        title: "답변 등록",
+        description: "답변이 등록되었습니다!",
+      });
+    } catch (error: any) {
+      console.error("Failed to submit answer:", error);
+      toast({
+        title: "전송 실패",
+        description: error?.message || "답변 전송에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
   };
 
-  const handleAcceptAnswer = (questionId: string, answerId: string) => {
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.id === questionId && msg.type === "question"
-          ? {
-              ...msg,
-              answers: msg.answers?.map((ans) =>
-                ans.id === answerId ? { ...ans, isAccepted: true } : ans
-              ),
-              status: "resolved" as const,
-            }
-          : msg
-      )
-    );
+  // 답변 채택 (REST API 사용)
+  const handleAcceptAnswer = async (questionId: number, answerId: number) => {
+    try {
+      console.log("👑 Accepting answer:", { questionId, answerId });
 
-    toast({
-      title: "답변 채택 완료",
-      description: "답변이 채택되어 질문이 해결되었습니다! 🎉",
-    });
+      await chatAPI.solveQuestion(questionId, answerId);
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === questionId && msg.type === "QUESTION"
+            ? {
+                ...msg,
+                answers: msg.answers?.map((ans) =>
+                  ans.id === answerId ? { ...ans, isAccepted: true } : ans
+                ),
+                status: "resolved" as const,
+                isSolved: true,
+              }
+            : msg
+        )
+      );
+
+      toast({
+        title: "답변 채택 완료",
+        description: "답변이 채택되어 질문이 해결되었습니다! 🎉",
+      });
+    } catch (error: any) {
+      console.error("Failed to accept answer:", error);
+      toast({
+        title: "채택 실패",
+        description: error?.message || "답변 채택에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
   };
 
-  const scrollToQuestion = (questionId: string) => {
+  // 질문으로 스크롤
+  const scrollToQuestion = (questionId: number) => {
     setQuestionListOpen(false);
+
     setTimeout(() => {
       const element = document.getElementById(`question-${questionId}`);
       if (element) {
@@ -648,12 +860,27 @@ const OpenStudyRoomPage: React.FC = () => {
     }, 100);
   };
 
-  const handleDeleteQuestion = (questionId: string) => {
-    setMessages((prev) => prev.filter((msg) => msg.id !== questionId));
-    toast({
-      title: "삭제 완료",
-      description: "질문이 삭제되었습니다.",
-    });
+  // 질문 삭제
+  const handleDeleteQuestion = async (questionId: number) => {
+    try {
+      console.log("🗑️ Deleting question:", questionId);
+      
+      await chatAPI.deleteMessage(questionId);
+
+      setMessages((prev) => prev.filter((msg) => msg.id !== questionId));
+
+      toast({
+        title: "삭제 완료",
+        description: "질문이 삭제되었습니다.",
+      });
+    } catch (error: any) {
+      console.error("Failed to delete question:", error);
+      toast({
+        title: "삭제 실패",
+        description: error?.message || "질문 삭제에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleCopyInviteLink = () => {
@@ -677,21 +904,26 @@ const OpenStudyRoomPage: React.FC = () => {
       const confirmDelete = confirm(
         "방장이 나가면 방이 삭제됩니다.\n정말로 방을 나가시겠습니까?"
       );
+
       if (!confirmDelete) {
         setExitDialogOpen(false);
         return;
       }
     }
 
+    // 스터디 세션 종료
     if (sessionId !== null) {
       try {
         const endResult = await sessionAPI.endSession(sessionId);
+        console.log("Session ended successfully:", endResult);
+
         if (endResult.leveledUp && endResult.newLevel !== null) {
           toast({
             title: "🎉 레벨업!",
             description: `축하합니다! 레벨 ${endResult.newLevel}이 되었습니다!`,
           });
         }
+
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
@@ -703,6 +935,15 @@ const OpenStudyRoomPage: React.FC = () => {
         console.error("Failed to end session:", sessionError);
       }
     }
+
+    // WebSocket 연결 해제
+    if (roomId) {
+      const roomIdNum = parseInt(roomId, 10);
+      if (!isNaN(roomIdNum)) {
+        webSocketService.unsubscribe(roomIdNum, "OPEN");
+      }
+    }
+    webSocketService.disconnect();
 
     await leaveRoom();
     toast({
@@ -732,12 +973,10 @@ const OpenStudyRoomPage: React.FC = () => {
       {/* 헤더 */}
       <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <h1 className="text-2xl font-bold text-gray-900">
-            {roomInfo.title}
-          </h1>
+          <h1 className="text-2xl font-bold text-gray-900">{roomInfo.title}</h1>
           <Badge variant="secondary">{roomInfo.studyField}</Badge>
 
-          {/* 참여자 수 */}
+          {/* 참여자 수 팝오버 */}
           <Popover>
             <PopoverTrigger asChild>
               <button className="flex items-center text-gray-600 hover:text-gray-900 transition-colors cursor-pointer">
@@ -840,11 +1079,11 @@ const OpenStudyRoomPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 메인 */}
+      {/* 메인 컨텐츠 */}
       <div className="flex-1 flex overflow-hidden">
         {/* 왼쪽: 채팅 */}
         <div className="flex-1 flex flex-col">
-          {/* 상태 + 타이머 */}
+          {/* 상태 전환 + 타이머 */}
           <div className="border-b bg-white p-4">
             <div className="flex items-center gap-4">
               <Button
@@ -917,27 +1156,13 @@ const OpenStudyRoomPage: React.FC = () => {
                     </span>
                   </div>
                 )}
-
-                {messages.filter(
-                  (m) => m.type === "question" && m.status !== "resolved"
-                ).length > 0 && (
-                  <Popover
-                    open={questionListOpen}
-                    onOpenChange={setQuestionListOpen}
-                  >
+                {messages.filter(m => m.type === "QUESTION" && m.status !== "resolved").length > 0 && (
+                  <Popover open={questionListOpen} onOpenChange={setQuestionListOpen}>
                     <PopoverTrigger asChild>
                       <button className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-red-50 to-orange-50 rounded-lg border border-red-200 hover:shadow-md transition-all cursor-pointer">
                         <HelpCircle className="w-4 h-4 text-red-500" />
                         <span className="font-semibold text-red-700">
-                          질문{" "}
-                          {
-                            messages.filter(
-                              (m) =>
-                                m.type === "question" &&
-                                m.status !== "resolved"
-                            ).length
-                          }
-                          개
+                          질문 {messages.filter(m => m.type === "QUESTION" && m.status !== "resolved").length}개
                         </span>
                       </button>
                     </PopoverTrigger>
@@ -949,11 +1174,7 @@ const OpenStudyRoomPage: React.FC = () => {
                         </h4>
                         <div className="space-y-2">
                           {messages
-                            .filter(
-                              (m) =>
-                                m.type === "question" &&
-                                m.status !== "resolved"
-                            )
+                            .filter(m => m.type === "QUESTION" && m.status !== "resolved")
                             .map((question) => (
                               <div
                                 key={question.id}
@@ -964,9 +1185,7 @@ const OpenStudyRoomPage: React.FC = () => {
                                   <div className="flex items-center gap-2">
                                     <Avatar className="w-6 h-6">
                                       <AvatarFallback className="bg-red-500 text-white text-xs">
-                                        {question.sender
-                                          ?.charAt(0)
-                                          .toUpperCase()}
+                                        {question.sender?.charAt(0).toUpperCase()}
                                       </AvatarFallback>
                                     </Avatar>
                                     <span className="font-medium text-sm">
@@ -974,30 +1193,21 @@ const OpenStudyRoomPage: React.FC = () => {
                                     </span>
                                   </div>
                                   <Badge
-                                    variant={
-                                      question.status === "helping"
-                                        ? "default"
-                                        : "destructive"
-                                    }
+                                    variant={question.status === "helping" ? "default" : "destructive"}
                                     className="text-xs"
                                   >
-                                    {question.status === "helping"
-                                      ? "답변 중"
-                                      : "도움 필요"}
+                                    {question.status === "helping" ? "답변 중" : "도움 필요"}
                                   </Badge>
                                 </div>
                                 <p className="text-sm text-gray-800 line-clamp-2 mb-1">
                                   "{question.content}"
                                 </p>
-                                {question.answers &&
-                                  question.answers.length > 0 && (
-                                    <div className="flex items-center gap-1 text-xs text-blue-600">
-                                      <MessageCircle className="w-3 h-3" />
-                                      <span>
-                                        답변 {question.answers.length}개
-                                      </span>
-                                    </div>
-                                  )}
+                                {question.answers && question.answers.length > 0 && (
+                                  <div className="flex items-center gap-1 text-xs text-blue-600">
+                                    <MessageCircle className="w-3 h-3" />
+                                    <span>답변 {question.answers.length}개</span>
+                                  </div>
+                                )}
                                 <span className="text-xs text-gray-500">
                                   {formatRelativeTime(question.timestamp)}
                                 </span>
@@ -1008,7 +1218,6 @@ const OpenStudyRoomPage: React.FC = () => {
                     </PopoverContent>
                   </Popover>
                 )}
-
                 <div className="flex items-center gap-1">
                   <TrendingUp className="w-4 h-4 text-green-500" />
                   <span>총 {formatTime(todayStats.totalStudyTime)}</span>
@@ -1019,7 +1228,7 @@ const OpenStudyRoomPage: React.FC = () => {
             </div>
           </div>
 
-          {/* 채팅 */}
+          {/* 채팅 메시지 */}
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
             {messages.length === 0 && (
               <div className="text-center text-gray-500 py-8">
@@ -1029,18 +1238,21 @@ const OpenStudyRoomPage: React.FC = () => {
             )}
             {messages.map((message) => (
               <div key={message.id}>
-                {message.type === "system" ? (
+                {message.type === "SYSTEM" ? (
                   <div className="text-center text-sm text-gray-500 py-2">
                     {message.content}
                   </div>
-                ) : message.type === "question" ? (
-                  <div
+                ) : message.type === "QUESTION" ? (
+                  <div 
                     id={`question-${message.id}`}
                     className="bg-gradient-to-r from-red-50 to-orange-50 rounded-lg p-4 border-l-4 border-red-500 space-y-3 transition-all"
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex items-center space-x-2">
                         <Avatar className="w-8 h-8">
+                          {message.senderProfileImage ? (
+                            <AvatarImage src={message.senderProfileImage} />
+                          ) : null}
                           <AvatarFallback className="bg-red-500 text-white">
                             {message.sender?.charAt(0).toUpperCase()}
                           </AvatarFallback>
@@ -1068,10 +1280,7 @@ const OpenStudyRoomPage: React.FC = () => {
                             </Badge>
                           </div>
                           <span className="text-xs text-gray-500">
-                            {message.timestamp.toLocaleTimeString("ko-KR", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
+                            {formatRelativeTime(message.timestamp)}
                           </span>
                         </div>
                       </div>
@@ -1090,9 +1299,7 @@ const OpenStudyRoomPage: React.FC = () => {
                     <div className="bg-white rounded-lg p-3 shadow-sm">
                       <div className="flex items-start gap-2">
                         <HelpCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                        <p className="text-gray-900 flex-1">
-                          {message.content}
-                        </p>
+                        <p className="text-gray-900 flex-1">{message.content}</p>
                       </div>
                     </div>
 
@@ -1102,105 +1309,96 @@ const OpenStudyRoomPage: React.FC = () => {
                           src={message.imageUrl}
                           alt="질문 첨부"
                           className="max-w-sm rounded cursor-pointer hover:opacity-90"
-                          onClick={() => window.open(message.imageUrl!)}
+                          onClick={() => window.open(message.imageUrl)}
                         />
                       </div>
                     )}
 
-                    {message.status === "resolved" &&
-                      message.answers &&
-                      message.answers.some((ans) => ans.isAccepted) && (
-                        <div className="pl-7 space-y-2">
-                          <div className="flex items-center gap-2 text-sm font-medium text-green-700">
-                            <CheckCircle className="w-4 h-4" />
-                            <span>채택된 답변</span>
-                          </div>
-                          {message.answers
-                            .filter((ans) => ans.isAccepted)
-                            .map((answer) => (
-                              <div
-                                key={answer.id}
-                                className="bg-green-50 rounded-lg p-3 border-2 border-green-300 shadow-sm"
-                              >
-                                <div className="flex items-center gap-2 mb-2">
-                                  <Avatar className="w-6 h-6">
-                                    <AvatarFallback className="bg-green-500 text-white text-xs">
-                                      {answer.answerer
-                                        .charAt(0)
-                                        .toUpperCase()}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <span className="font-medium text-sm">
-                                    {answer.answerer}
-                                  </span>
-                                  <Badge
-                                    variant="secondary"
-                                    className="text-xs bg-green-100 text-green-700"
-                                  >
-                                    채택됨 ✓
-                                  </Badge>
-                                  <span className="text-xs text-gray-500">
-                                    {formatRelativeTime(answer.timestamp)}
-                                  </span>
-                                </div>
-                                <p className="text-sm text-gray-800 pl-8">
-                                  {answer.content}
-                                </p>
-                              </div>
-                            ))}
+                    {message.status === "resolved" && message.answers && message.answers.some(ans => ans.isAccepted) && (
+                      <div className="pl-7 space-y-2">
+                        <div className="flex items-center gap-2 text-sm font-medium text-green-700">
+                          <CheckCircle className="w-4 h-4" />
+                          <span>채택된 답변</span>
                         </div>
-                      )}
-
-                    {message.status !== "resolved" &&
-                      message.answers &&
-                      message.answers.length > 0 && (
-                        <div className="space-y-2 pl-7">
-                          <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                            <MessageCircle className="w-4 h-4" />
-                            <span>답변 {message.answers.length}개</span>
-                          </div>
-                          {message.answers.map((answer) => (
-                            <div
-                              key={answer.id}
-                              className="bg-blue-50 rounded-lg p-3 border border-blue-200"
-                            >
-                              <div className="flex items-start justify-between gap-2 mb-2">
-                                <div className="flex items-center gap-2">
-                                  <Avatar className="w-6 h-6">
-                                    <AvatarFallback className="bg-blue-500 text-white text-xs">
-                                      {answer.answerer
-                                        .charAt(0)
-                                        .toUpperCase()}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <span className="font-medium text-sm">
-                                    {answer.answerer}
-                                  </span>
-                                  <span className="text-xs text-gray-500">
-                                    {formatRelativeTime(answer.timestamp)}
-                                  </span>
-                                </div>
-                                {message.sender === user?.username && (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 text-green-600 hover:text-green-700 hover:bg-green-50"
-                                    onClick={() =>
-                                      handleAcceptAnswer(message.id, answer.id)
-                                    }
-                                  >
-                                    <CheckCircle className="w-4 h-4 mr-1" />
-                                    채택
-                                  </Button>
-                                )}
-                              </div>
-                              <p className="text-sm text-gray-800 pl-8">
-                                {answer.content}
-                              </p>
+                        {message.answers.filter(ans => ans.isAccepted).map((answer) => (
+                          <div
+                            key={answer.id}
+                            className="bg-green-50 rounded-lg p-3 border-2 border-green-300 shadow-sm"
+                          >
+                            <div className="flex items-center gap-2 mb-2">
+                              <Avatar className="w-6 h-6">
+                                {answer.answererProfileImage ? (
+                                  <AvatarImage src={answer.answererProfileImage} />
+                                ) : null}
+                                <AvatarFallback className="bg-green-500 text-white text-xs">
+                                  {answer.answerer.charAt(0).toUpperCase()}
+                                </AvatarFallback>
+                              </Avatar>
+                              <span className="font-medium text-sm">
+                                {answer.answerer}
+                              </span>
+                              <Badge variant="secondary" className="text-xs bg-green-100 text-green-700">
+                                채택됨 ✓
+                              </Badge>
+                              <span className="text-xs text-gray-500">
+                                {formatRelativeTime(answer.timestamp)}
+                              </span>
                             </div>
-                          ))}
+                            <p className="text-sm text-gray-800 pl-8">
+                              {answer.content}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {message.status !== "resolved" && message.answers && message.answers.length > 0 && (
+                      <div className="space-y-2 pl-7">
+                        <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                          <MessageCircle className="w-4 h-4" />
+                          <span>답변 {message.answers.length}개</span>
                         </div>
-                      )}
+                        {message.answers.map((answer) => (
+                          <div
+                            key={answer.id}
+                            className="bg-blue-50 rounded-lg p-3 border border-blue-200"
+                          >
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <div className="flex items-center gap-2">
+                                <Avatar className="w-6 h-6">
+                                  {answer.answererProfileImage ? (
+                                    <AvatarImage src={answer.answererProfileImage} />
+                                  ) : null}
+                                  <AvatarFallback className="bg-blue-500 text-white text-xs">
+                                    {answer.answerer.charAt(0).toUpperCase()}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <span className="font-medium text-sm">
+                                  {answer.answerer}
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                  {formatRelativeTime(answer.timestamp)}
+                                </span>
+                              </div>
+                              {message.sender === user?.username && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-green-600 hover:text-green-700 hover:bg-green-50"
+                                  onClick={() => handleAcceptAnswer(message.id, answer.id)}
+                                >
+                                  <CheckCircle className="w-4 h-4 mr-1" />
+                                  채택
+                                </Button>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-800 pl-8">
+                              {answer.content}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {message.status !== "resolved" && (
                       <div className="pl-7 flex gap-2">
@@ -1231,6 +1429,9 @@ const OpenStudyRoomPage: React.FC = () => {
                 ) : (
                   <div className="flex items-start space-x-3">
                     <Avatar className="w-8 h-8">
+                      {message.senderProfileImage ? (
+                        <AvatarImage src={message.senderProfileImage} />
+                      ) : null}
                       <AvatarFallback>
                         {message.sender?.charAt(0).toUpperCase()}
                       </AvatarFallback>
@@ -1241,53 +1442,22 @@ const OpenStudyRoomPage: React.FC = () => {
                           {message.sender}
                         </span>
                         <span className="text-xs text-gray-500">
-                          {message.timestamp.toLocaleTimeString("ko-KR", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                          {formatRelativeTime(message.timestamp)}
                         </span>
                       </div>
 
-                      {message.type === "text" && (
-                        <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
-                          <p className="text-gray-900">{message.content}</p>
-                        </div>
-                      )}
-
-                      {message.type === "image" && (
-                        <div className="bg-white rounded-lg p-2 shadow-sm">
+                      <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
+                        {message.imageUrl ? (
                           <img
                             src={message.imageUrl}
                             alt="uploaded"
                             className="max-w-xs rounded cursor-pointer hover:opacity-90"
-                            onClick={() => window.open(message.imageUrl!)}
+                            onClick={() => window.open(message.imageUrl)}
                           />
-                        </div>
-                      )}
-
-                      {message.type === "file" && (
-                        <div className="bg-white rounded-lg px-4 py-3 shadow-sm flex items-center justify-between max-w-md">
-                          <div className="flex items-center space-x-3">
-                            <Paperclip className="w-5 h-5 text-gray-400" />
-                            <div>
-                              <p className="text-sm font-medium text-gray-900">
-                                {message.fileName}
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                {(
-                                  (message.fileSize || 0) /
-                                  1024 /
-                                  1024
-                                ).toFixed(2)}{" "}
-                                MB
-                              </p>
-                            </div>
-                          </div>
-                          <Button variant="ghost" size="sm">
-                            <Download className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      )}
+                        ) : (
+                          <p className="text-gray-900">{message.content}</p>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1351,9 +1521,7 @@ const OpenStudyRoomPage: React.FC = () => {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() =>
-                  document.getElementById("image-upload")?.click()
-                }
+                onClick={() => document.getElementById("image-upload")?.click()}
               >
                 <ImageIcon className="w-5 h-5" />
               </Button>
