@@ -5,8 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -21,13 +20,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { toast } from "@/hooks/use-toast";
-import { 
-  openStudyAPI, 
-  OpenStudyRoom, 
-  sessionAPI, 
-  SessionStartRequestDto,
-  SessionEndResultDto,
-  LevelInfoDto
+import {
+  openStudyAPI,
+  OpenStudyRoom,
+  sessionAPI,
+  LevelInfoDto,
 } from "@/lib/api";
 import {
   Users,
@@ -82,9 +79,9 @@ const OpenStudyRoomPage: React.FC = () => {
   const { user } = useAuth();
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const helpFileInputRef = useRef<HTMLInputElement>(null);
   const hasJoinedRef = useRef(false);
   const isLeavingRef = useRef(false);
 
@@ -99,16 +96,16 @@ const OpenStudyRoomPage: React.FC = () => {
   // My Status
   const [myStatus, setMyStatus] = useState<"studying" | "resting">("studying");
 
-  // Session - 백엔드 연동
+  // Session
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(0);
   const intervalRef = useRef<any>(null);
-  
+
   // Level Info
   const [levelInfo, setLevelInfo] = useState<LevelInfoDto | null>(null);
 
-  // Today's Stats
+  // Today Stats
   const [todayStats, setTodayStats] = useState({
     totalStudyTime: 0,
     studySessions: 0,
@@ -123,7 +120,7 @@ const OpenStudyRoomPage: React.FC = () => {
   const [questionImage, setQuestionImage] = useState<string | null>(null);
   const [questionFileName, setQuestionFileName] = useState<string | null>(null);
 
-  // Answer input for specific question
+  // Answer inputs
   const [answerInputs, setAnswerInputs] = useState<Record<string, string>>({});
 
   // Question list popover
@@ -133,7 +130,7 @@ const OpenStudyRoomPage: React.FC = () => {
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
 
-  // 시간 포맷 함수
+  // 시간 포맷
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -149,7 +146,6 @@ const OpenStudyRoomPage: React.FC = () => {
       .padStart(2, "0")}`;
   };
 
-  // 상대적 시간 표시
   const formatRelativeTime = (date: Date) => {
     const now = new Date();
     const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
@@ -165,39 +161,37 @@ const OpenStudyRoomPage: React.FC = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 레벨 정보 조회
+  // 레벨 정보
   useEffect(() => {
     const fetchLevelInfo = async () => {
+      if (!user) return;
       try {
         const info = await sessionAPI.getLevelInfo();
         setLevelInfo(info);
-      } catch (error) {
-        console.error("Failed to fetch level info:", error);
+      } catch (e) {
+        console.error("Failed to fetch level info:", e);
       }
     };
-
-    if (user) {
-      fetchLevelInfo();
-    }
+    fetchLevelInfo();
   }, [user]);
 
-  // 타이머 실시간 UI 업데이트 - myStatus에 따라 작동
+  // 타이머
   useEffect(() => {
-    // 기존 interval 정리
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
 
-    // ✅ "공부중" 상태일 때만 타이머 시작
     if (myStatus === "studying") {
-      // ✅ 함수형 업데이트를 사용하여 항상 최신 상태를 참조
       intervalRef.current = setInterval(() => {
-        setCurrentSeconds((prevSeconds) => prevSeconds + 1);
+        setCurrentSeconds((prev) => prev + 1);
+        setTodayStats((prev) => ({
+          ...prev,
+          totalStudyTime: prev.totalStudyTime + 1,
+        }));
       }, 1000);
     }
 
-    // 메모리 누수 방지를 위한 클린업
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -206,29 +200,26 @@ const OpenStudyRoomPage: React.FC = () => {
     };
   }, [myStatus]);
 
-  // 방 입장 처리
+  // ---------- 방 입장 로직 (비방장 새로고침 시 튕김 방지) ----------
   useEffect(() => {
     if (!user || !roomId || hasJoinedRef.current) return;
+
+    // 이 유저가 이 방에 이미 입장한 적이 있는지 확인하는 키
+    const joinedKey = user.id
+      ? `openStudy_joined_${roomId}_${user.id}`
+      : null;
 
     const joinRoom = async () => {
       try {
         setLoading(true);
         console.log("Attempting to join room:", roomId);
 
+        // 1) 방 정보 조회
         let roomData: OpenStudyRoom;
         try {
           roomData = await openStudyAPI.getRoom(roomId);
           console.log("Room data loaded:", roomData);
           setRoomInfo(roomData);
-
-          setParticipants([
-            {
-              id: "creator",
-              username: roomData.creatorUsername || "방장",
-              status: "studying",
-              isCreator: true,
-            },
-          ]);
         } catch (error: any) {
           console.error("Failed to get room info:", error);
           toast({
@@ -236,80 +227,112 @@ const OpenStudyRoomPage: React.FC = () => {
             description: "방 정보를 불러올 수 없습니다.",
             variant: "destructive",
           });
+          setLoading(false);
           navigate("/open-study");
           return;
         }
 
-        // ✅ 방 생성자인지 확인
+        // 방장 여부
         const isCreator =
           roomData.creatorUsername === user.username ||
           (roomData.createdBy && roomData.createdBy === user.id);
 
-        // ✅ 생성자가 아닐 때만 joinRoom 호출
+        // 이미 이 방에 들어온 적 있는지 (새로고침 판단용)
+        const alreadyJoined =
+          !!joinedKey && localStorage.getItem(joinedKey) === "true";
+
+        console.log("Join check:", {
+          isCreator,
+          alreadyJoined,
+          joinedKey,
+        });
+
+        // 2) 참여자 UI 기본 세팅
+        const baseParticipants: Participant[] = [
+          {
+            id: "creator",
+            username: roomData.creatorUsername || "방장",
+            status: "studying",
+            isCreator: true,
+          },
+        ];
         if (!isCreator) {
+          baseParticipants.push({
+            id: user.id?.toString() || "me",
+            username: user.username,
+            status: "studying",
+            isCreator: false,
+          });
+        }
+        setParticipants(baseParticipants);
+
+        // 3) 비방장 & 처음 입장일 때만 join API 호출
+        if (!isCreator && !alreadyJoined) {
           try {
             await openStudyAPI.joinRoom(roomId);
             console.log("Successfully joined room via API");
           } catch (joinError: any) {
-            if (
-              joinError?.message?.includes("이미") ||
-              joinError?.message?.includes("already") ||
-              joinError?.message?.includes("409")
-            ) {
-              console.log("Already in room, continuing...");
+            const msg = joinError?.message || "";
+            console.error("[openStudyAPI.joinRoom] error:", msg);
+
+            // 410: 곧 삭제될 방 -> 진짜 입장 실패
+            const isClosingError =
+              msg.includes("곧 삭제될") ||
+              msg.includes("410") ||
+              msg.toLowerCase().includes("closing");
+
+            if (isClosingError) {
+              toast({
+                title: "입장 실패",
+                description: "곧 삭제될 방입니다. 다른 방을 이용해 주세요.",
+                variant: "destructive",
+              });
+              throw joinError; // 바깥 catch로 던져서 목록으로 이동
+            }
+
+            // 409 or '이미 ~ 참여 중' 은 "이미 이 방(또는 다른 방)에 참여 중" 상태
+            const isAlreadyJoinedError =
+              msg.includes("이미") ||
+              msg.toLowerCase().includes("already") ||
+              msg.includes("409");
+
+            if (isAlreadyJoinedError) {
+              console.log(
+                "[openStudyAPI.joinRoom] Already joined room, ignore error."
+              );
             } else {
+              // 그 외 에러는 진짜 에러
               throw joinError;
             }
           }
         } else {
-          console.log("Room creator, skipping joinRoom call");
+          console.log("Skip joinRoom call (creator or alreadyJoined)");
         }
 
-        // ✅ 스터디 세션 시작 연동
+        // 4) 세션 시작 (에러 나도 방 입장은 유지)
         try {
           const roomIdNum = parseInt(roomId, 10);
           if (!isNaN(roomIdNum)) {
-            console.log("Calling sessionAPI.startSession with:", { studyType: 'OPEN_STUDY', roomId: roomIdNum });
             const sessionResponse = await sessionAPI.startSession({
-              studyType: 'OPEN_STUDY',
-              roomId: roomIdNum
+              studyType: "OPEN_STUDY",
+              roomId: roomIdNum,
             });
             console.log("Session API response:", sessionResponse);
-            
             setSessionId(sessionResponse.sessionId);
             setIsSessionActive(true);
             setCurrentSeconds(0);
-            console.log("Session state updated:", {
-              sessionId: sessionResponse.sessionId,
-              isSessionActive: true
-            });
-          } else {
-            console.error("Invalid roomId:", roomId);
           }
         } catch (sessionError: any) {
           console.error("Failed to start session:", sessionError);
-          console.error("Session error details:", {
-            message: sessionError?.message,
-            stack: sessionError?.stack
-          });
-          // 세션 시작 실패해도 방 입장은 계속 진행
         }
 
+        // 5) 로컬 상태 기록
         localStorage.setItem("currentOpenStudyRoom", roomId);
-        hasJoinedRef.current = true;
-
-        if (roomData.creatorUsername !== user.username) {
-          setParticipants((prev) => [
-            ...prev,
-            {
-              id: user.id?.toString() || "me",
-              username: user.username,
-              status: "studying",
-              isCreator: false,
-            },
-          ]);
+        if (!isCreator && joinedKey) {
+          localStorage.setItem(joinedKey, "true");
         }
 
+        hasJoinedRef.current = true;
         addSystemMessage(`${user.username}님이 입장했습니다.`);
 
         toast({
@@ -321,13 +344,22 @@ const OpenStudyRoomPage: React.FC = () => {
       } catch (error: any) {
         console.error("Failed to join room:", error);
 
+        const joinedKeyToClear =
+          user?.id && roomId
+            ? `openStudy_joined_${roomId}_${user.id}`
+            : null;
+
+        localStorage.removeItem("currentOpenStudyRoom");
+        if (joinedKeyToClear) {
+          localStorage.removeItem(joinedKeyToClear);
+        }
+
         toast({
           title: "입장 실패",
           description: error?.message || "방 입장에 실패했습니다.",
           variant: "destructive",
         });
 
-        localStorage.removeItem("currentOpenStudyRoom");
         setLoading(false);
         navigate("/open-study");
       }
@@ -336,12 +368,21 @@ const OpenStudyRoomPage: React.FC = () => {
     joinRoom();
   }, [user, roomId, navigate]);
 
-  // 브라우저 이벤트 처리
+  // ---------- 브라우저 종료 / 언마운트 시 방 나가기 ----------
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
         isLeavingRef.current = true;
+
+        const joinedKey =
+          user?.id && roomId
+            ? `openStudy_joined_${roomId}_${user.id}`
+            : null;
+
         localStorage.removeItem("currentOpenStudyRoom");
+        if (joinedKey) {
+          localStorage.removeItem(joinedKey);
+        }
 
         const baseURL =
           import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
@@ -365,53 +406,30 @@ const OpenStudyRoomPage: React.FC = () => {
         leaveRoom();
       }
     };
-  }, [roomId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, user]);
 
   const leaveRoom = async () => {
     if (!roomId || isLeavingRef.current) return;
     isLeavingRef.current = true;
 
+    const joinedKey =
+      user?.id && roomId ? `openStudy_joined_${roomId}_${user.id}` : null;
+
     try {
       localStorage.removeItem("currentOpenStudyRoom");
+      if (joinedKey) {
+        localStorage.removeItem(joinedKey);
+      }
       await openStudyAPI.leaveRoom(roomId);
       hasJoinedRef.current = false;
     } catch (error) {
       console.error("Failed to leave room:", error);
       localStorage.removeItem("currentOpenStudyRoom");
-      hasJoinedRef.current = false;
-    }
-  };
-
-  const deleteRoom = async () => {
-    if (!roomId || isLeavingRef.current) return;
-    isLeavingRef.current = true;
-
-    try {
-      localStorage.removeItem("currentOpenStudyRoom");
-      await openStudyAPI.deleteRoom(roomId);
-      toast({
-        title: "방 삭제 완료",
-        description: "스터디 방이 삭제되었습니다.",
-      });
-      hasJoinedRef.current = false;
-    } catch (error: any) {
-      console.error("Failed to delete room:", error);
-      localStorage.removeItem("currentOpenStudyRoom");
-      hasJoinedRef.current = false;
-
-      // ✅ 500 에러 발생해도 방 나가기는 성공으로 처리
-      if (error?.message?.includes("500")) {
-        toast({
-          title: "방 나가기 완료",
-          description: "스터디룸에서 나왔습니다.",
-        });
-      } else {
-        toast({
-          title: "오류",
-          description: error?.message || "방 삭제에 실패했습니다.",
-          variant: "destructive",
-        });
+      if (joinedKey) {
+        localStorage.removeItem(joinedKey);
       }
+      hasJoinedRef.current = false;
     }
   };
 
@@ -424,9 +442,7 @@ const OpenStudyRoomPage: React.FC = () => {
         studySessions: prev.studySessions + 1,
       }));
       addSystemMessage(
-        `${
-          user?.username
-        }님이 휴식 모드로 전환했습니다. (공부 시간: ${formatTime(
+        `${user?.username}님이 휴식 모드로 전환했습니다. (공부 시간: ${formatTime(
           currentSeconds
         )})`
       );
@@ -458,7 +474,6 @@ const OpenStudyRoomPage: React.FC = () => {
     if (!messageInput.trim()) return;
 
     if (isQuestionMode) {
-      // 질문 메시지 전송
       const newMessage: ChatMessage = {
         id: Date.now().toString(),
         type: "question",
@@ -476,7 +491,6 @@ const OpenStudyRoomPage: React.FC = () => {
         `${user?.username}님이 질문했습니다: "${messageInput.slice(0, 30)}..."`
       );
 
-      // 리셋
       setMessageInput("");
       setIsQuestionMode(false);
       setQuestionImage(null);
@@ -487,7 +501,6 @@ const OpenStudyRoomPage: React.FC = () => {
         description: "질문이 등록되었습니다. 다른 참여자들이 답변해줄 거예요!",
       });
     } else {
-      // 일반 텍스트 메시지 전송
       const newMessage: ChatMessage = {
         id: Date.now().toString(),
         type: "text",
@@ -527,11 +540,9 @@ const OpenStudyRoomPage: React.FC = () => {
     const imageUrl = URL.createObjectURL(file);
 
     if (isQuestionMode) {
-      // 질문 모드일 때는 첨부파일로 저장
       setQuestionImage(imageUrl);
       setQuestionFileName(file.name);
     } else {
-      // 일반 모드일 때는 바로 이미지 메시지 전송
       const newMessage: ChatMessage = {
         id: Date.now().toString(),
         type: "image",
@@ -571,7 +582,6 @@ const OpenStudyRoomPage: React.FC = () => {
     setMessages((prev) => [...prev, newMessage]);
   };
 
-  // 질문에 답변 추가
   const handleSubmitAnswer = (questionId: string) => {
     const answerText = answerInputs[questionId];
     if (!answerText?.trim()) return;
@@ -595,7 +605,6 @@ const OpenStudyRoomPage: React.FC = () => {
       )
     );
 
-    // 답변 입력 초기화
     setAnswerInputs((prev) => ({ ...prev, [questionId]: "" }));
 
     toast({
@@ -604,7 +613,6 @@ const OpenStudyRoomPage: React.FC = () => {
     });
   };
 
-  // 답변 채택
   const handleAcceptAnswer = (questionId: string, answerId: string) => {
     setMessages((prev) =>
       prev.map((msg) =>
@@ -626,16 +634,12 @@ const OpenStudyRoomPage: React.FC = () => {
     });
   };
 
-  // 질문으로 스크롤
   const scrollToQuestion = (questionId: string) => {
     setQuestionListOpen(false);
-    
-    // 약간의 지연을 두고 스크롤 (팝오버가 닫히는 시간 확보)
     setTimeout(() => {
       const element = document.getElementById(`question-${questionId}`);
       if (element) {
         element.scrollIntoView({ behavior: "smooth", block: "center" });
-        // 하이라이트 효과
         element.classList.add("ring-4", "ring-red-300", "ring-opacity-50");
         setTimeout(() => {
           element.classList.remove("ring-4", "ring-red-300", "ring-opacity-50");
@@ -644,10 +648,8 @@ const OpenStudyRoomPage: React.FC = () => {
     }, 100);
   };
 
-  // 질문 삭제
   const handleDeleteQuestion = (questionId: string) => {
     setMessages((prev) => prev.filter((msg) => msg.id !== questionId));
-
     toast({
       title: "삭제 완료",
       description: "질문이 삭제되었습니다.",
@@ -675,28 +677,21 @@ const OpenStudyRoomPage: React.FC = () => {
       const confirmDelete = confirm(
         "방장이 나가면 방이 삭제됩니다.\n정말로 방을 나가시겠습니까?"
       );
-
       if (!confirmDelete) {
         setExitDialogOpen(false);
         return;
       }
     }
 
-    // ✅ 스터디 세션 종료 연동
     if (sessionId !== null) {
       try {
         const endResult = await sessionAPI.endSession(sessionId);
-        console.log("Session ended successfully:", endResult);
-        
-        // 레벨업 확인 및 축하 메시지
         if (endResult.leveledUp && endResult.newLevel !== null) {
           toast({
             title: "🎉 레벨업!",
             description: `축하합니다! 레벨 ${endResult.newLevel}이 되었습니다!`,
           });
         }
-        
-        // setInterval 정리 및 currentSeconds 초기화
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
@@ -706,11 +701,9 @@ const OpenStudyRoomPage: React.FC = () => {
         setIsSessionActive(false);
       } catch (sessionError: any) {
         console.error("Failed to end session:", sessionError);
-        // 세션 종료 실패해도 방 나가기는 계속 진행
       }
     }
 
-    // ✅ 방장이든 아니든 leaveRoom 호출 (백엔드에서 방장이면 방 자동 삭제)
     await leaveRoom();
     toast({
       title: isCreator ? "방 삭제 완료" : "방 나가기 완료",
@@ -739,10 +732,12 @@ const OpenStudyRoomPage: React.FC = () => {
       {/* 헤더 */}
       <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <h1 className="text-2xl font-bold text-gray-900">{roomInfo.title}</h1>
+          <h1 className="text-2xl font-bold text-gray-900">
+            {roomInfo.title}
+          </h1>
           <Badge variant="secondary">{roomInfo.studyField}</Badge>
 
-          {/* 참여자 수 팝오버 */}
+          {/* 참여자 수 */}
           <Popover>
             <PopoverTrigger asChild>
               <button className="flex items-center text-gray-600 hover:text-gray-900 transition-colors cursor-pointer">
@@ -845,11 +840,11 @@ const OpenStudyRoomPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 메인 컨텐츠 */}
+      {/* 메인 */}
       <div className="flex-1 flex overflow-hidden">
-        {/* 왼쪽: 채팅 (전체 너비) */}
+        {/* 왼쪽: 채팅 */}
         <div className="flex-1 flex flex-col">
-          {/* 상태 전환 + 타이머 */}
+          {/* 상태 + 타이머 */}
           <div className="border-b bg-white p-4">
             <div className="flex items-center gap-4">
               <Button
@@ -912,7 +907,6 @@ const OpenStudyRoomPage: React.FC = () => {
               </div>
 
               <div className="ml-auto flex items-center gap-4 text-sm text-gray-600">
-                {/* 레벨 정보 표시 */}
                 {levelInfo && (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-indigo-50 to-sky-50 rounded-lg border border-indigo-200">
                     <span className="font-semibold text-indigo-700">
@@ -923,14 +917,27 @@ const OpenStudyRoomPage: React.FC = () => {
                     </span>
                   </div>
                 )}
-                {/* 질문 개수 표시 - 팝오버로 변경 */}
-                {messages.filter(m => m.type === "question" && m.status !== "resolved").length > 0 && (
-                  <Popover open={questionListOpen} onOpenChange={setQuestionListOpen}>
+
+                {messages.filter(
+                  (m) => m.type === "question" && m.status !== "resolved"
+                ).length > 0 && (
+                  <Popover
+                    open={questionListOpen}
+                    onOpenChange={setQuestionListOpen}
+                  >
                     <PopoverTrigger asChild>
                       <button className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-red-50 to-orange-50 rounded-lg border border-red-200 hover:shadow-md transition-all cursor-pointer">
                         <HelpCircle className="w-4 h-4 text-red-500" />
                         <span className="font-semibold text-red-700">
-                          질문 {messages.filter(m => m.type === "question" && m.status !== "resolved").length}개
+                          질문{" "}
+                          {
+                            messages.filter(
+                              (m) =>
+                                m.type === "question" &&
+                                m.status !== "resolved"
+                            ).length
+                          }
+                          개
                         </span>
                       </button>
                     </PopoverTrigger>
@@ -942,7 +949,11 @@ const OpenStudyRoomPage: React.FC = () => {
                         </h4>
                         <div className="space-y-2">
                           {messages
-                            .filter(m => m.type === "question" && m.status !== "resolved")
+                            .filter(
+                              (m) =>
+                                m.type === "question" &&
+                                m.status !== "resolved"
+                            )
                             .map((question) => (
                               <div
                                 key={question.id}
@@ -953,7 +964,9 @@ const OpenStudyRoomPage: React.FC = () => {
                                   <div className="flex items-center gap-2">
                                     <Avatar className="w-6 h-6">
                                       <AvatarFallback className="bg-red-500 text-white text-xs">
-                                        {question.sender?.charAt(0).toUpperCase()}
+                                        {question.sender
+                                          ?.charAt(0)
+                                          .toUpperCase()}
                                       </AvatarFallback>
                                     </Avatar>
                                     <span className="font-medium text-sm">
@@ -961,21 +974,30 @@ const OpenStudyRoomPage: React.FC = () => {
                                     </span>
                                   </div>
                                   <Badge
-                                    variant={question.status === "helping" ? "default" : "destructive"}
+                                    variant={
+                                      question.status === "helping"
+                                        ? "default"
+                                        : "destructive"
+                                    }
                                     className="text-xs"
                                   >
-                                    {question.status === "helping" ? "답변 중" : "도움 필요"}
+                                    {question.status === "helping"
+                                      ? "답변 중"
+                                      : "도움 필요"}
                                   </Badge>
                                 </div>
                                 <p className="text-sm text-gray-800 line-clamp-2 mb-1">
                                   "{question.content}"
                                 </p>
-                                {question.answers && question.answers.length > 0 && (
-                                  <div className="flex items-center gap-1 text-xs text-blue-600">
-                                    <MessageCircle className="w-3 h-3" />
-                                    <span>답변 {question.answers.length}개</span>
-                                  </div>
-                                )}
+                                {question.answers &&
+                                  question.answers.length > 0 && (
+                                    <div className="flex items-center gap-1 text-xs text-blue-600">
+                                      <MessageCircle className="w-3 h-3" />
+                                      <span>
+                                        답변 {question.answers.length}개
+                                      </span>
+                                    </div>
+                                  )}
                                 <span className="text-xs text-gray-500">
                                   {formatRelativeTime(question.timestamp)}
                                 </span>
@@ -986,6 +1008,7 @@ const OpenStudyRoomPage: React.FC = () => {
                     </PopoverContent>
                   </Popover>
                 )}
+
                 <div className="flex items-center gap-1">
                   <TrendingUp className="w-4 h-4 text-green-500" />
                   <span>총 {formatTime(todayStats.totalStudyTime)}</span>
@@ -996,7 +1019,7 @@ const OpenStudyRoomPage: React.FC = () => {
             </div>
           </div>
 
-          {/* 채팅 메시지 */}
+          {/* 채팅 */}
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
             {messages.length === 0 && (
               <div className="text-center text-gray-500 py-8">
@@ -1011,8 +1034,7 @@ const OpenStudyRoomPage: React.FC = () => {
                     {message.content}
                   </div>
                 ) : message.type === "question" ? (
-                  // 질문 메시지
-                  <div 
+                  <div
                     id={`question-${message.id}`}
                     className="bg-gradient-to-r from-red-50 to-orange-50 rounded-lg p-4 border-l-4 border-red-500 space-y-3 transition-all"
                   >
@@ -1065,110 +1087,121 @@ const OpenStudyRoomPage: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 질문 내용 */}
                     <div className="bg-white rounded-lg p-3 shadow-sm">
                       <div className="flex items-start gap-2">
                         <HelpCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                        <p className="text-gray-900 flex-1">{message.content}</p>
+                        <p className="text-gray-900 flex-1">
+                          {message.content}
+                        </p>
                       </div>
                     </div>
 
-                    {/* 첨부 이미지 */}
                     {message.imageUrl && (
                       <div className="bg-white rounded-lg p-2">
                         <img
                           src={message.imageUrl}
                           alt="질문 첨부"
                           className="max-w-sm rounded cursor-pointer hover:opacity-90"
-                          onClick={() => window.open(message.imageUrl)}
+                          onClick={() => window.open(message.imageUrl!)}
                         />
                       </div>
                     )}
 
-                    {/* 채택된 답변 (해결된 경우) */}
-                    {message.status === "resolved" && message.answers && message.answers.some(ans => ans.isAccepted) && (
-                      <div className="pl-7 space-y-2">
-                        <div className="flex items-center gap-2 text-sm font-medium text-green-700">
-                          <CheckCircle className="w-4 h-4" />
-                          <span>채택된 답변</span>
-                        </div>
-                        {message.answers.filter(ans => ans.isAccepted).map((answer) => (
-                          <div
-                            key={answer.id}
-                            className="bg-green-50 rounded-lg p-3 border-2 border-green-300 shadow-sm"
-                          >
-                            <div className="flex items-center gap-2 mb-2">
-                              <Avatar className="w-6 h-6">
-                                <AvatarFallback className="bg-green-500 text-white text-xs">
-                                  {answer.answerer.charAt(0).toUpperCase()}
-                                </AvatarFallback>
-                              </Avatar>
-                              <span className="font-medium text-sm">
-                                {answer.answerer}
-                              </span>
-                              <Badge variant="secondary" className="text-xs bg-green-100 text-green-700">
-                                채택됨 ✓
-                              </Badge>
-                              <span className="text-xs text-gray-500">
-                                {formatRelativeTime(answer.timestamp)}
-                              </span>
-                            </div>
-                            <p className="text-sm text-gray-800 pl-8">
-                              {answer.content}
-                            </p>
+                    {message.status === "resolved" &&
+                      message.answers &&
+                      message.answers.some((ans) => ans.isAccepted) && (
+                        <div className="pl-7 space-y-2">
+                          <div className="flex items-center gap-2 text-sm font-medium text-green-700">
+                            <CheckCircle className="w-4 h-4" />
+                            <span>채택된 답변</span>
                           </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* 답변 목록 (해결되지 않은 경우) */}
-                    {message.status !== "resolved" && message.answers && message.answers.length > 0 && (
-                      <div className="space-y-2 pl-7">
-                        <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
-                          <MessageCircle className="w-4 h-4" />
-                          <span>답변 {message.answers.length}개</span>
-                        </div>
-                        {message.answers.map((answer) => (
-                          <div
-                            key={answer.id}
-                            className="bg-blue-50 rounded-lg p-3 border border-blue-200"
-                          >
-                            <div className="flex items-start justify-between gap-2 mb-2">
-                              <div className="flex items-center gap-2">
-                                <Avatar className="w-6 h-6">
-                                  <AvatarFallback className="bg-blue-500 text-white text-xs">
-                                    {answer.answerer.charAt(0).toUpperCase()}
-                                  </AvatarFallback>
-                                </Avatar>
-                                <span className="font-medium text-sm">
-                                  {answer.answerer}
-                                </span>
-                                <span className="text-xs text-gray-500">
-                                  {formatRelativeTime(answer.timestamp)}
-                                </span>
+                          {message.answers
+                            .filter((ans) => ans.isAccepted)
+                            .map((answer) => (
+                              <div
+                                key={answer.id}
+                                className="bg-green-50 rounded-lg p-3 border-2 border-green-300 shadow-sm"
+                              >
+                                <div className="flex items-center gap-2 mb-2">
+                                  <Avatar className="w-6 h-6">
+                                    <AvatarFallback className="bg-green-500 text-white text-xs">
+                                      {answer.answerer
+                                        .charAt(0)
+                                        .toUpperCase()}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <span className="font-medium text-sm">
+                                    {answer.answerer}
+                                  </span>
+                                  <Badge
+                                    variant="secondary"
+                                    className="text-xs bg-green-100 text-green-700"
+                                  >
+                                    채택됨 ✓
+                                  </Badge>
+                                  <span className="text-xs text-gray-500">
+                                    {formatRelativeTime(answer.timestamp)}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-gray-800 pl-8">
+                                  {answer.content}
+                                </p>
                               </div>
-                              {/* 질문 작성자만 채택 버튼 표시 */}
-                              {message.sender === user?.username && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-green-600 hover:text-green-700 hover:bg-green-50"
-                                  onClick={() => handleAcceptAnswer(message.id, answer.id)}
-                                >
-                                  <CheckCircle className="w-4 h-4 mr-1" />
-                                  채택
-                                </Button>
-                              )}
-                            </div>
-                            <p className="text-sm text-gray-800 pl-8">
-                              {answer.content}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                            ))}
+                        </div>
+                      )}
 
-                    {/* 답변 입력 (해결되지 않은 경우만) */}
+                    {message.status !== "resolved" &&
+                      message.answers &&
+                      message.answers.length > 0 && (
+                        <div className="space-y-2 pl-7">
+                          <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
+                            <MessageCircle className="w-4 h-4" />
+                            <span>답변 {message.answers.length}개</span>
+                          </div>
+                          {message.answers.map((answer) => (
+                            <div
+                              key={answer.id}
+                              className="bg-blue-50 rounded-lg p-3 border border-blue-200"
+                            >
+                              <div className="flex items-start justify-between gap-2 mb-2">
+                                <div className="flex items-center gap-2">
+                                  <Avatar className="w-6 h-6">
+                                    <AvatarFallback className="bg-blue-500 text-white text-xs">
+                                      {answer.answerer
+                                        .charAt(0)
+                                        .toUpperCase()}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <span className="font-medium text-sm">
+                                    {answer.answerer}
+                                  </span>
+                                  <span className="text-xs text-gray-500">
+                                    {formatRelativeTime(answer.timestamp)}
+                                  </span>
+                                </div>
+                                {message.sender === user?.username && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-green-600 hover:text-green-700 hover:bg-green-50"
+                                    onClick={() =>
+                                      handleAcceptAnswer(message.id, answer.id)
+                                    }
+                                  >
+                                    <CheckCircle className="w-4 h-4 mr-1" />
+                                    채택
+                                  </Button>
+                                )}
+                              </div>
+                              <p className="text-sm text-gray-800 pl-8">
+                                {answer.content}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                     {message.status !== "resolved" && (
                       <div className="pl-7 flex gap-2">
                         <Input
@@ -1196,7 +1229,6 @@ const OpenStudyRoomPage: React.FC = () => {
                     )}
                   </div>
                 ) : (
-                  // 일반 메시지
                   <div className="flex items-start space-x-3">
                     <Avatar className="w-8 h-8">
                       <AvatarFallback>
@@ -1228,7 +1260,7 @@ const OpenStudyRoomPage: React.FC = () => {
                             src={message.imageUrl}
                             alt="uploaded"
                             className="max-w-xs rounded cursor-pointer hover:opacity-90"
-                            onClick={() => window.open(message.imageUrl)}
+                            onClick={() => window.open(message.imageUrl!)}
                           />
                         </div>
                       )}
@@ -1266,7 +1298,6 @@ const OpenStudyRoomPage: React.FC = () => {
 
           {/* 채팅 입력 */}
           <div className="border-t bg-white p-4">
-            {/* 질문 모드 표시 */}
             {isQuestionMode && (
               <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1320,7 +1351,9 @@ const OpenStudyRoomPage: React.FC = () => {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => document.getElementById("image-upload")?.click()}
+                onClick={() =>
+                  document.getElementById("image-upload")?.click()
+                }
               >
                 <ImageIcon className="w-5 h-5" />
               </Button>

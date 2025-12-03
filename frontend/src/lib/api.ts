@@ -157,7 +157,7 @@ export interface OpenStudyParticipant {
   memberId: number;
   nickname: string;
   profileImage?: string;
-  timerStatus: 'STUDYING' | 'RESTING'; // ✅ PersonalTimer가 없으면 기본값 RESTING 반환
+  timerStatus: "STUDYING" | "RESTING"; // ✅ PersonalTimer가 없으면 기본값 RESTING 반환
 }
 
 // ✅ 오픈 스터디룸 타입 (백엔드 스키마 기준)
@@ -384,8 +384,33 @@ export const openStudyAPI = {
     apiClient.get<OpenStudyRoom>(`/api/open-study/rooms/${roomId}`),
 
   // ✅ POST /api/open-study/rooms/{roomId}/join
-  joinRoom: (roomId: string | number) =>
-    apiClient.post<{ message: string }>(`/api/open-study/rooms/${roomId}/join`),
+  // 방장이 아닌 사용자가 새로고침해도 이미 참여 중이면 에러로 튕겨나가지 않도록
+  // 409(Conflict)나 "이미/already" 계열 메시지는 정상 상태로 간주해서 무시한다.
+  joinRoom: async (roomId: string | number) => {
+    try {
+      return await apiClient.post<{ message: string }>(
+        `/api/open-study/rooms/${roomId}/join`
+      );
+    } catch (error: any) {
+      const raw = String(error?.message ?? error ?? "");
+      const lower = raw.toLowerCase();
+
+      const isAlreadyJoined =
+        raw.includes("409") || raw.includes("이미") || lower.includes("already");
+
+      if (isAlreadyJoined) {
+        console.warn(
+          "[openStudyAPI.joinRoom] Already joined room, ignoring error:",
+          error
+        );
+        // 호출부에서는 반환값을 쓰지 않으므로, 그냥 undefined를 성공처럼 돌려보낸다.
+        return undefined as unknown as { message: string };
+      }
+
+      // 그 외 에러는 그대로 전파 (권한 문제, 방 삭제 등 진짜 오류)
+      throw error;
+    }
+  },
 
   // ✅ POST /api/open-study/rooms/{roomId}/leave
   leaveRoom: (roomId: string | number) =>
