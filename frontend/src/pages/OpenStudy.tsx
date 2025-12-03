@@ -103,10 +103,12 @@ const OpenStudy: React.FC = () => {
       
       // PageResponse 구조 처리
       if (responseData && responseData.content) {
-        const roomsData = responseData.content.map((room: any) => ({
-          ...room,
-          title: room.title || room.roomName || "",
-        }));
+        const roomsData = responseData.content
+          .filter((room: any) => room.isActive !== false) // ✅ 활성 방만 필터링
+          .map((room: any) => ({
+            ...room,
+            title: room.title || room.roomName || "",
+          }));
 
         setRooms(roomsData);
         setCurrentPage(responseData.currentPage || responseData.page || 1);
@@ -115,10 +117,12 @@ const OpenStudy: React.FC = () => {
       } 
       // 배열로 직접 온 경우
       else if (Array.isArray(responseData)) {
-        const roomsData = responseData.map((room: any) => ({
-          ...room,
-          title: room.title || room.roomName || "",
-        }));
+        const roomsData = responseData
+          .filter((room: any) => room.isActive !== false) // ✅ 활성 방만 필터링
+          .map((room: any) => ({
+            ...room,
+            title: room.title || room.roomName || "",
+          }));
         setRooms(roomsData);
         setCurrentPage(1);
         setTotalPages(1);
@@ -126,14 +130,22 @@ const OpenStudy: React.FC = () => {
       }
       // 단일 객체인 경우 배열로 래핑
       else if (responseData && typeof responseData === 'object' && responseData.id) {
-        const roomsData = [responseData].map((room: any) => ({
-          ...room,
-          title: room.title || room.roomName || "",
-        }));
-        setRooms(roomsData);
-        setCurrentPage(1);
-        setTotalPages(1);
-        setTotalElements(1);
+        // ✅ 활성 방만 표시
+        if (responseData.isActive !== false) {
+          const roomsData = [responseData].map((room: any) => ({
+            ...room,
+            title: room.title || room.roomName || "",
+          }));
+          setRooms(roomsData);
+          setCurrentPage(1);
+          setTotalPages(1);
+          setTotalElements(1);
+        } else {
+          setRooms([]);
+          setCurrentPage(1);
+          setTotalPages(0);
+          setTotalElements(0);
+        }
       }
       else {
         setRooms([]);
