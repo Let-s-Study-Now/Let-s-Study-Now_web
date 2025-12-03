@@ -120,18 +120,6 @@ const GroupStudyRoomPage: React.FC = () => {
       timerStatus: "STUDYING",
       statusMessage: "오늘도 화이팅!",
     },
-    {
-      id: 3,
-      username: "민수",
-      timerStatus: "RESTING",
-      statusMessage: "잠시 휴식 중...",
-    },
-    {
-      id: 4,
-      username: "지은",
-      timerStatus: "STUDYING",
-      statusMessage: "알고리즘 문제 풀고 있어요",
-    },
   ]);
 
   // 상태 메시지 편집 관련
@@ -727,6 +715,91 @@ const GroupStudyRoomPage: React.FC = () => {
           </h1>
           <Badge variant="secondary">{roomInfo.studyField}</Badge>
 
+          {/* 참여자 수 팝오버 */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <button className="flex items-center text-gray-600 hover:text-gray-900 transition-colors cursor-pointer">
+                <Users className="w-4 h-4 mr-2" />
+                <span className="font-medium">
+                  {participants.length}/{roomInfo.maxMembers}
+                </span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-4">
+              <div className="space-y-3">
+                <h4 className="font-semibold text-sm text-gray-900">
+                  👥 참여자 목록
+                </h4>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {participants.map((participant) => (
+                    <div
+                      key={participant.id}
+                      className={`flex items-center space-x-3 p-2 rounded-lg ${
+                        participant.isCreator
+                          ? "bg-yellow-50 border border-yellow-200"
+                          : participant.username === user?.username
+                          ? "bg-indigo-50 border border-indigo-200"
+                          : "bg-gray-50"
+                      }`}
+                    >
+                      <Avatar className="w-8 h-8">
+                        {participant.profileImageUrl ? (
+                          <AvatarImage src={participant.profileImageUrl} />
+                        ) : null}
+                        <AvatarFallback
+                          className={
+                            participant.isCreator
+                              ? "bg-yellow-500 text-white"
+                              : participant.username === user?.username
+                              ? "bg-indigo-500 text-white"
+                              : "bg-gray-400 text-white"
+                          }
+                        >
+                          {participant.username.charAt(0).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">
+                            {participant.username}
+                          </span>
+                          {participant.isCreator && (
+                            <Badge
+                              variant="secondary"
+                              className="text-xs bg-yellow-100"
+                            >
+                              방장
+                            </Badge>
+                          )}
+                          {participant.username === user?.username &&
+                            !participant.isCreator && (
+                              <Badge variant="secondary" className="text-xs">
+                                나
+                              </Badge>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              participant.timerStatus === "STUDYING"
+                                ? "bg-green-500"
+                                : "bg-orange-500"
+                            }`}
+                          ></span>
+                          <span className="text-xs text-gray-500">
+                            {participant.timerStatus === "STUDYING"
+                              ? "공부중"
+                              : "휴식중"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+
           {/* 남은 시간 표시 */}
           {roomInfo.remainingMinutes && roomInfo.remainingMinutes > 0 && (
             <div className="flex items-center text-sm text-gray-600">
@@ -1245,205 +1318,6 @@ const GroupStudyRoomPage: React.FC = () => {
             </div>
           </div>
         </div>
-
-        {/* 오른쪽: 참여자 목록 사이드바 (UI만) */}
-        {roomInfo && (
-          <div className="w-80 border-l bg-white flex flex-col">
-            <div className="p-4 border-b bg-gray-50">
-              <h3 className="font-semibold text-base text-gray-900 flex items-center gap-2">
-                <Users className="w-5 h-5" />
-                참여자 목록
-              </h3>
-              <p className="text-xs text-gray-500 mt-1">
-                {participants.length}/{roomInfo.maxMembers}명 참여 중
-              </p>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {participants.length === 0 ? (
-                <div className="p-8 text-center">
-                  <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                  <p className="text-sm text-gray-500">참여자가 없습니다</p>
-                </div>
-              ) : (
-                <div className="divide-y">
-                  {participants.map((participant) => {
-                    const isCreator =
-                      participant.isCreator ||
-                      participant.id === roomInfo.creatorId;
-                    const isCurrentUser =
-                      participant.username === user?.username;
-
-                    return (
-                      <div
-                        key={participant.id}
-                        className={`flex items-start space-x-3 p-4 transition-colors ${
-                          isCreator
-                            ? "bg-yellow-50/50"
-                            : isCurrentUser
-                            ? "bg-indigo-50/50"
-                            : "bg-white hover:bg-gray-50"
-                        }`}
-                      >
-                        <div className="relative flex-shrink-0">
-                          <Avatar
-                            className={`w-12 h-12 ring-2 ring-offset-2 ring-offset-white ${
-                              isCreator
-                                ? "ring-yellow-500"
-                                : isCurrentUser
-                                ? "ring-indigo-500"
-                                : "ring-gray-300"
-                            }`}
-                          >
-                            <AvatarImage src={participant.profileImageUrl} />
-                            <AvatarFallback
-                              className={
-                                isCreator
-                                  ? "bg-yellow-500 text-white text-base font-semibold"
-                                  : isCurrentUser
-                                  ? "bg-indigo-500 text-white text-base font-semibold"
-                                  : "bg-gray-400 text-white text-base font-semibold"
-                              }
-                            >
-                              {participant.username.charAt(0).toUpperCase()}
-                            </AvatarFallback>
-                          </Avatar>
-                          {/* 상태 표시 점 */}
-                          <div
-                            className={`absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-white ${
-                              participant.timerStatus === "STUDYING"
-                                ? "bg-green-500"
-                                : "bg-orange-500"
-                            }`}
-                            title={
-                              participant.timerStatus === "STUDYING"
-                                ? "공부중"
-                                : "휴식중"
-                            }
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-sm font-semibold text-gray-900 truncate">
-                              {participant.username}
-                            </span>
-                            {isCreator && (
-                              <Badge
-                                variant="secondary"
-                                className="text-xs bg-yellow-100 text-yellow-800 border-yellow-200 flex-shrink-0"
-                              >
-                                방장
-                              </Badge>
-                            )}
-                            {isCurrentUser && !isCreator && (
-                              <Badge
-                                variant="secondary"
-                                className="text-xs bg-indigo-100 text-indigo-800 flex-shrink-0"
-                              >
-                                나
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <div className="flex items-center gap-1.5">
-                              {participant.timerStatus === "STUDYING" ? (
-                                <BookOpen className="w-3.5 h-3.5 text-green-600" />
-                              ) : (
-                                <Coffee className="w-3.5 h-3.5 text-orange-600" />
-                              )}
-                              <span
-                                className={`text-xs font-medium ${
-                                  participant.timerStatus === "STUDYING"
-                                    ? "text-green-700"
-                                    : "text-orange-700"
-                                }`}
-                              >
-                                {participant.timerStatus === "STUDYING"
-                                  ? "공부중"
-                                  : "휴식중"}
-                              </span>
-                            </div>
-                          </div>
-                          {/* 상태 메시지 */}
-                          {isCurrentUser && isEditingStatusMessage ? (
-                            // 본인이고 편집 모드일 때
-                            <div className="mt-2 space-y-2">
-                              <Input
-                                value={statusMessageInput}
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  if (value.length <= 50) {
-                                    setStatusMessageInput(value);
-                                  }
-                                }}
-                                placeholder="상태 메시지를 입력하세요 (50자 이내)"
-                                className="text-xs h-8"
-                                maxLength={50}
-                                onKeyPress={(e) => {
-                                  if (e.key === "Enter") {
-                                    handleSaveStatusMessage();
-                                  }
-                                }}
-                              />
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs text-gray-400">
-                                  {statusMessageInput.length}/50
-                                </span>
-                                <div className="flex items-center gap-1">
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 px-2"
-                                    onClick={handleCancelEditStatusMessage}
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 px-2"
-                                    onClick={handleSaveStatusMessage}
-                                    disabled={
-                                      statusMessageInput.trim().length === 0
-                                    }
-                                  >
-                                    <Check className="w-3.5 h-3.5 text-green-600" />
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            // 일반 표시 모드
-                            <div className="mt-1 flex items-start justify-between gap-2">
-                              {participant.statusMessage ? (
-                                <div className="text-xs text-gray-600 line-clamp-2 flex-1">
-                                  {participant.statusMessage}
-                                </div>
-                              ) : (
-                                <div className="text-xs text-gray-400 italic flex-1">
-                                  상태 메시지가 없습니다
-                                </div>
-                              )}
-                              {isCurrentUser && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-6 px-2 flex-shrink-0"
-                                  onClick={handleStartEditStatusMessage}
-                                >
-                                  <Edit2 className="w-3 h-3 text-gray-400" />
-                                </Button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* 나가기 다이얼로그 */}
