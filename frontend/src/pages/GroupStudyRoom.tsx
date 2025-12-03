@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -48,6 +49,7 @@ import {
   Users,
   Edit2,
   Check,
+  Copy,
 } from "lucide-react";
 
 interface HelpAnswer {
@@ -138,6 +140,7 @@ const GroupStudyRoomPage: React.FC = () => {
   const [questionListOpen, setQuestionListOpen] = useState(false);
 
   // Dialogs
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
 
   // 상태 메시지 저장
@@ -189,6 +192,16 @@ const GroupStudyRoomPage: React.FC = () => {
     if (diff < 3600) return `${Math.floor(diff / 60)}분 전`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}시간 전`;
     return `${Math.floor(diff / 86400)}일 전`;
+  };
+
+  // 초대 링크 복사
+  const handleCopyInviteLink = () => {
+    const inviteLink = `${window.location.origin}/#/group-study/room/${roomId}`;
+    navigator.clipboard.writeText(inviteLink);
+    toast({
+      title: "초대 링크 복사 완료",
+      description: "초대 링크가 클립보드에 복사되었습니다.",
+    });
   };
 
   // 채팅 스크롤
@@ -813,6 +826,14 @@ const GroupStudyRoomPage: React.FC = () => {
           <Button
             variant="outline"
             size="sm"
+            onClick={() => setInviteDialogOpen(true)}
+          >
+            <Users className="w-4 h-4 mr-2" />
+            초대
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setExitDialogOpen(true)}
           >
             <LogOut className="w-4 h-4 mr-2" />
@@ -1319,6 +1340,33 @@ const GroupStudyRoomPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* 초대 다이얼로그 */}
+      <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>🎉 친구 초대하기</DialogTitle>
+            <DialogDescription>
+              친구들을 초대하여 함께 공부하세요!
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label className="text-sm font-medium mb-2">초대 링크</Label>
+              <div className="flex space-x-2">
+                <Input
+                  readOnly
+                  value={`${window.location.origin}/#/group-study/room/${roomId}`}
+                  className="flex-1"
+                />
+                <Button onClick={handleCopyInviteLink}>
+                  <Copy className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 나가기 다이얼로그 */}
       <Dialog open={exitDialogOpen} onOpenChange={setExitDialogOpen}>
