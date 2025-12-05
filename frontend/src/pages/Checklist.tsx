@@ -67,23 +67,35 @@ const ChecklistPage: React.FC = () => {
     setLoading(true);
     try {
       const dateStr = formatDate(selectedDate);
+      console.log("📋 Loading checklists for date:", dateStr);
       const checklistsData = await checklistAPI.getChecklists(dateStr);
+      console.log("✅ Checklists loaded:", checklistsData);
+      
       // API 응답이 배열인지 확인
       if (Array.isArray(checklistsData)) {
-        setChecklists(checklistsData);
+        // API 응답의 isCompleted를 completed로 매핑
+        const mappedChecklists = checklistsData.map((item: any) => ({
+          ...item,
+          completed: item.isCompleted !== undefined ? item.isCompleted : item.completed,
+        }));
+        setChecklists(mappedChecklists);
+        console.log(`✅ Set ${mappedChecklists.length} checklists`);
       } else {
+        console.warn("⚠️ API response is not an array:", checklistsData);
         setChecklists([]);
       }
-    } catch (error) {
-      console.error("Failed to load checklists:", error);
+    } catch (error: any) {
+      console.error("❌ Failed to load checklists:", error);
+      const errorMessage = error?.message || error?.response?.data?.message || "체크리스트를 불러오는데 실패했습니다.";
       toast({
         title: "오류",
-        description: "체크리스트를 불러오는데 실패했습니다.",
+        description: errorMessage,
         variant: "destructive",
       });
       setChecklists([]); // 에러 시 빈 배열로 설정
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const loadMonthSummary = async () => {
@@ -116,11 +128,15 @@ const ChecklistPage: React.FC = () => {
     setLoading(true);
     try {
       const dateStr = formatDate(selectedDate);
+      console.log("📝 Creating checklist:", { targetDate: dateStr, content: newChecklistContent.trim() });
+      
       // API 스키마에 맞게 수정: targetDate로 변경
-      await checklistAPI.createChecklist({
+      const result = await checklistAPI.createChecklist({
         targetDate: dateStr,
         content: newChecklistContent.trim(),
       });
+      
+      console.log("✅ Checklist created successfully:", result);
 
       toast({
         title: "성공",
@@ -129,16 +145,26 @@ const ChecklistPage: React.FC = () => {
 
       setCreateDialogOpen(false);
       setNewChecklistContent("");
-      loadChecklists();
-      loadMonthSummary();
-    } catch (error) {
+      
+      // 약간의 지연 후 체크리스트 다시 로드 (서버 반영 시간 고려)
+      setTimeout(() => {
+        loadChecklists();
+        loadMonthSummary();
+      }, 300);
+      
+      // 메인 페이지에 체크리스트 업데이트 알림
+      window.dispatchEvent(new Event("checklistUpdated"));
+    } catch (error: any) {
+      console.error("❌ Failed to create checklist:", error);
+      const errorMessage = error?.message || error?.response?.data?.message || "체크리스트 생성에 실패했습니다.";
       toast({
         title: "오류",
-        description: "체크리스트 생성에 실패했습니다.",
+        description: errorMessage,
         variant: "destructive",
       });
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleEditChecklist = async () => {
@@ -202,6 +228,9 @@ const ChecklistPage: React.FC = () => {
       setSelectedForDelete([]);
       loadChecklists();
       loadMonthSummary();
+      
+      // 메인 페이지에 체크리스트 업데이트 알림
+      window.dispatchEvent(new Event("checklistUpdated"));
     } catch (error) {
       toast({
         title: "오류",
@@ -213,18 +242,51 @@ const ChecklistPage: React.FC = () => {
   };
 
   const handleToggleChecklist = async (checklistId: string) => {
-    setLoading(true);
+    // 낙관적 업데이트: 즉시 UI 업데이트
+    setChecklists((prevChecklists) =>
+      prevChecklists.map((checklist) =>
+        checklist.id === checklistId
+          ? { ...checklist, completed: !checklist.completed }
+          : checklist
+      )
+    );
+
     try {
-      await checklistAPI.toggleChecklist(checklistId);
-      loadChecklists();
-    } catch (error) {
+      console.log("🔄 Toggling checklist:", checklistId);
+      const result: any = await checklistAPI.toggleChecklist(checklistId);
+      console.log("✅ Checklist toggled successfully:", result);
+      
+      // 서버 응답의 isCompleted를 completed로 매핑하여 즉시 업데이트
+      if (result) {
+        const updatedChecklist = {
+          ...result,
+          completed: result.isCompleted !== undefined ? result.isCompleted : result.completed,
+        };
+        setChecklists((prevChecklists) =>
+          prevChecklists.map((checklist) =>
+            checklist.id === checklistId ? updatedChecklist : checklist
+          )
+        );
+      }
+      
+      // 서버 응답으로 최신 상태 동기화
+      await loadChecklists();
+      
+      // 메인 페이지에 체크리스트 업데이트 알림
+      window.dispatchEvent(new Event("checklistUpdated"));
+    } catch (error: any) {
+      console.error("❌ Failed to toggle checklist:", error);
+      
+      // 실패 시 이전 상태로 롤백
+      await loadChecklists();
+      
+      const errorMessage = error?.message || error?.response?.data?.message || "체크리스트 상태 변경에 실패했습니다.";
       toast({
         title: "오류",
-        description: "체크리스트 상태 변경에 실패했습니다.",
+        description: errorMessage,
         variant: "destructive",
       });
     }
-    setLoading(false);
   };
 
   const openEditDialog = (checklist: Checklist) => {
@@ -465,10 +527,12 @@ const ChecklistPage: React.FC = () => {
                         }`}
                       >
                         <Checkbox
-                          checked={checklist.completed}
-                          onCheckedChange={() =>
-                            handleToggleChecklist(checklist.id)
-                          }
+                          checked={checklist.completed ?? false}
+                          onCheckedChange={(checked) => {
+                            if (checked !== undefined) {
+                              handleToggleChecklist(checklist.id);
+                            }
+                          }}
                           disabled={loading}
                         />
 
