@@ -4,40 +4,103 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Users, BookOpen, CheckSquare, Clock } from "lucide-react";
 import Navbar from "@/components/Navbar";
-import { checklistAPI, Checklist } from "@/lib/api";
+import { checklistAPI, Checklist, sessionAPI } from "@/lib/api";
+import { getWeeklyStudyTime, getConsecutiveAttendance } from "@/lib/studyStats";
 
 const Index = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [todayChecklists, setTodayChecklists] = useState<Checklist[]>([]);
   const [loadingChecklists, setLoadingChecklists] = useState(false);
+  const [weeklyStudyTime, setWeeklyStudyTime] = useState<number>(0);
+  const [consecutiveAttendance, setConsecutiveAttendance] = useState<number>(0);
+  const [loadingStats, setLoadingStats] = useState(false);
 
-  // 오늘 날짜의 체크리스트 로드
+  // 오늘 날짜의 체크리스트 로드 (초기 로드 시에만 로딩 표시)
   useEffect(() => {
     if (user) {
-      loadTodayChecklists();
+      loadTodayChecklists(true); // 초기 로드 시에만 로딩 표시
+      loadStatistics();
     }
   }, [user]);
 
-  // 페이지 포커스/가시성 변경 시 체크리스트 다시 로드 (체크리스트 페이지에서 변경 후 돌아올 때)
-  useEffect(() => {
-    const handleFocus = () => {
-      if (user) {
-        loadTodayChecklists();
+  // 학습 통계 로드
+  const loadStatistics = async () => {
+    if (!user) return;
+    setLoadingStats(true);
+    try {
+      // 먼저 API에서 시도
+      const stats = await sessionAPI.getStatistics();
+      console.log("✅ Statistics loaded from API:", stats);
+      if (stats) {
+        setWeeklyStudyTime(stats.weeklyStudyTime || 0);
+        setConsecutiveAttendance(stats.consecutiveAttendance || 0);
       }
+    } catch (error: any) {
+      console.warn("⚠️ API statistics not available, using localStorage:", error);
+      
+      // API 실패 시 localStorage에서 불러오기
+      if (user.id) {
+        const weeklyTime = getWeeklyStudyTime(user.id);
+        const attendance = getConsecutiveAttendance(user.id);
+        console.log("✅ Statistics loaded from localStorage:", { weeklyTime, attendance });
+        setWeeklyStudyTime(weeklyTime || 0);
+        setConsecutiveAttendance(attendance || 0);
+      } else {
+        setWeeklyStudyTime(0);
+        setConsecutiveAttendance(0);
+      }
+    }
+    setLoadingStats(false);
+  };
+
+  // 시간 포맷팅 함수
+  const formatTime = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+  };
+
+  // 페이지 포커스/가시성 변경 시 체크리스트와 통계 다시 로드
+  useEffect(() => {
+    if (!user) return;
+
+    const handleFocus = () => {
+      loadTodayChecklists(false); // 포커스 시에는 로딩 표시 안 함
+      loadStatistics();
     };
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible" && user) {
-        loadTodayChecklists();
+      if (document.visibilityState === "visible") {
+        loadTodayChecklists(false); // 가시성 변경 시에는 로딩 표시 안 함
+        loadStatistics();
       }
     };
 
+    // 체크리스트 업데이트 이벤트 리스너 (체크리스트 페이지에서 체크 시 발생)
+    const handleChecklistUpdate = () => {
+      loadTodayChecklists(false); // 이벤트 기반 업데이트 시에는 로딩 표시 안 함
+    };
+
+    // 주기적으로 통계만 업데이트 (30초마다, 체크리스트는 이벤트 기반으로만 업데이트)
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        loadStatistics();
+      }
+    }, 30000);
+
     window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("checklistUpdated", handleChecklistUpdate);
+    
     return () => {
       window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("checklistUpdated", handleChecklistUpdate);
+      clearInterval(interval);
     };
   }, [user]);
 
@@ -45,21 +108,40 @@ const Index = () => {
     return date.toISOString().split("T")[0];
   };
 
-  const loadTodayChecklists = async () => {
-    setLoadingChecklists(true);
+  const loadTodayChecklists = async (showLoading = false) => {
+    if (showLoading) {
+      setLoadingChecklists(true);
+    }
     try {
       const today = formatDate(new Date());
       const checklistsData = await checklistAPI.getChecklists(today);
       if (Array.isArray(checklistsData)) {
-        setTodayChecklists(checklistsData);
+        // API 응답의 isCompleted를 completed로 매핑
+        const mappedChecklists = checklistsData.map((item: any) => ({
+          ...item,
+          completed: item.isCompleted !== undefined ? item.isCompleted : item.completed,
+        }));
+        
+        // 데이터가 실제로 변경되었을 때만 상태 업데이트 (깜빡임 방지)
+        setTodayChecklists((prev) => {
+          const prevStr = JSON.stringify(prev);
+          const newStr = JSON.stringify(mappedChecklists);
+          if (prevStr === newStr) {
+            return prev; // 변경사항이 없으면 이전 상태 유지
+          }
+          return mappedChecklists;
+        });
       } else {
         setTodayChecklists([]);
       }
     } catch (error) {
       console.error("Failed to load today's checklists:", error);
       setTodayChecklists([]);
+    } finally {
+      if (showLoading) {
+        setLoadingChecklists(false);
+      }
     }
-    setLoadingChecklists(false);
   };
 
   // 체크리스트 통계 계산
@@ -255,8 +337,14 @@ const Index = () => {
               <div className="bg-white border border-indigo-100 rounded-2xl p-5 flex flex-col gap-4">
                 <div className="grid grid-cols-2 gap-3 text-center">
                   {[
-                    { label: "이번 주", value: "8h 30m" },
-                    { label: "연속 출석", value: "7일" },
+                    { 
+                      label: "이번 주", 
+                      value: loadingStats ? "로딩 중..." : formatTime(weeklyStudyTime)
+                    },
+                    { 
+                      label: "연속 출석", 
+                      value: loadingStats ? "로딩 중..." : `${consecutiveAttendance}일`
+                    },
                   ].map((stat) => (
                     <div
                       key={stat.label}
