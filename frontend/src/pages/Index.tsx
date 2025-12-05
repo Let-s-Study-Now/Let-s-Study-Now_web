@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Users, BookOpen, CheckSquare, Clock } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import { checklistAPI, Checklist, sessionAPI } from "@/lib/api";
-import { getWeeklyStudyTime, getConsecutiveAttendance } from "@/lib/studyStats";
+
 
 const Index = () => {
   const { user } = useAuth();
@@ -24,35 +24,39 @@ const Index = () => {
     }
   }, [user]);
 
-  // 학습 통계 로드
-  const loadStatistics = async () => {
-    if (!user) return;
-    setLoadingStats(true);
-    try {
-      // 먼저 API에서 시도
-      const stats = await sessionAPI.getStatistics();
-      console.log("✅ Statistics loaded from API:", stats);
-      if (stats) {
-        setWeeklyStudyTime(stats.weeklyStudyTime || 0);
-        setConsecutiveAttendance(stats.consecutiveAttendance || 0);
-      }
-    } catch (error: any) {
-      console.warn("⚠️ API statistics not available, using localStorage:", error);
-      
-      // API 실패 시 localStorage에서 불러오기
-      if (user.id) {
-        const weeklyTime = getWeeklyStudyTime(user.id);
-        const attendance = getConsecutiveAttendance(user.id);
-        console.log("✅ Statistics loaded from localStorage:", { weeklyTime, attendance });
-        setWeeklyStudyTime(weeklyTime || 0);
-        setConsecutiveAttendance(attendance || 0);
+// 통계 로드 함수에서 localStorage 직접 읽도록 변경
+const loadStatistics = async () => {
+  if (!user) return;
+  setLoadingStats(true);
+
+  try {
+  } catch (error) {
+    console.warn("⚠️ API statistics failed:", error);
+  }
+
+  // ⛔ studyStats 대체 로직 — localStorage 직접 읽기
+  try {
+    if (user.id) {
+      const userKey = `studyStats_${user.id}`;
+      const saved = localStorage.getItem(userKey);
+
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setWeeklyStudyTime(parsed.weeklyStudyTime || 0);
+        setConsecutiveAttendance(parsed.consecutiveAttendance || 0);
       } else {
         setWeeklyStudyTime(0);
         setConsecutiveAttendance(0);
       }
     }
-    setLoadingStats(false);
-  };
+  } catch (e) {
+    console.error("Failed to load local statistics:", e);
+    setWeeklyStudyTime(0);
+    setConsecutiveAttendance(0);
+  }
+
+  setLoadingStats(false);
+};
 
   // 시간 포맷팅 함수
   const formatTime = (seconds: number): string => {
