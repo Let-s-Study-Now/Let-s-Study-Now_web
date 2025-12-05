@@ -264,6 +264,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
+      // ✅ SockJS를 위한 global 폴리필 추가
+      global: "globalThis",
       // Define environment variables for build-time configuration
       // In production, this will be false by default unless explicitly set to 'true'
       // In development and test, this will be true by default

@@ -25,7 +25,6 @@ import { toast } from "@/hooks/use-toast";
 import {
   groupAPI,
   studyRoomAPI,
-  authAPI, // ✅ 추가
   Group,
   GroupStudyRoom,
   GroupMember,
@@ -92,85 +91,98 @@ const GroupStudy: React.FC = () => {
     }
   }, [user]);
 
-  // 초대 링크 처리 (UI만 구현, API는 나중에)
+  // 초대 링크 처리
   useEffect(() => {
-    // URL에서 초대 그룹 ID 확인 (예: /group-invite/123)
     const handleInviteLink = async () => {
       if (!inviteGroupId) return;
 
       const groupId = Number(inviteGroupId);
       if (isNaN(groupId)) return;
 
-      // 로그인 상태 확인
       if (!user) {
-        // 로그인 페이지로 이동 (초대 링크 정보 저장)
         const inviteLink = `${window.location.origin}/#/group-invite/${groupId}`;
         localStorage.setItem("pendingInvite", inviteLink);
         navigate("/login");
         return;
       }
 
-      // 이미 로그인된 경우
       try {
-        // 그룹 목록 로드
-        const groups = await groupAPI.getMyGroups();
-        const isAlreadyMember = groups.some((g) => g.id === groupId);
+        // 1. 그룹 멤버 목록 조회로 이미 멤버인지 확인
+        let isAlreadyMember = false;
+        try {
+          const members = await groupAPI.getMembers(groupId);
+          isAlreadyMember = members.some((m) => m.memberId === Number(user.id));
+        } catch (error) {
+          console.error("멤버 목록 조회 실패:", error);
+        }
 
         if (isAlreadyMember) {
-          // 이미 멤버인 경우 그룹 멤버 다이얼로그 열기
-          const group = groups.find((g) => g.id === groupId);
-          if (group) {
-            // 멤버 목록 로드 및 다이얼로그 열기
-            setSelectedGroupForMembers(group);
-            setLoadingMembers(true);
-            try {
-              const members = await groupAPI.getMembers(group.id);
-              setGroupMembers(members);
-              setMembersDialogOpen(true);
-            } catch (error) {
-              console.error("멤버 로드 실패:", error);
-            } finally {
-              setLoadingMembers(false);
-            }
-            // URL 정리
-            navigate("/group-study", { replace: true });
-          }
-        } else {
-          // 멤버가 아닌 경우 자동 추가
+          // ✅ 이미 멤버인 경우
+          toast({
+            title: "알림",
+            description: "이미 그룹 멤버입니다.",
+          });
+
+          // 그룹 정보 조회
           try {
-            await groupAPI.addMember(groupId, Number(user.id));
-            toast({
-              title: "성공",
-              description: "그룹에 자동으로 추가되었습니다.",
-            });
-            await loadMyGroups();
-            // 추가된 그룹의 멤버 다이얼로그 열기
-            const updatedGroups = await groupAPI.getMyGroups();
-            const addedGroup = updatedGroups.find((g) => g.id === groupId);
-            if (addedGroup) {
-              setSelectedGroupForMembers(addedGroup);
-              setLoadingMembers(true);
-              try {
-                const members = await groupAPI.getMembers(addedGroup.id);
-                setGroupMembers(members);
-                setMembersDialogOpen(true);
-              } catch (error) {
-                console.error("멤버 로드 실패:", error);
-              } finally {
-                setLoadingMembers(false);
-              }
-            }
-          } catch (addError: any) {
-            console.error("멤버 추가 실패:", addError);
-            toast({
-              title: "오류",
-              description: addError?.message || "그룹에 추가하는데 실패했습니다.",
-              variant: "destructive",
-            });
+            const group = await groupAPI.getGroup(groupId);
+            setSelectedGroupForMembers(group);
+            
+            const members = await groupAPI.getMembers(groupId);
+            setGroupMembers(members);
+            setMembersDialogOpen(true);
+          } catch (error) {
+            console.error("그룹 정보 조회 실패:", error);
           }
-          // URL 정리
+
           navigate("/group-study", { replace: true });
+          return;
         }
+
+        // 2. 멤버가 아닌 경우 - 추가 시도
+        let addSuccess = false;
+        try {
+          await groupAPI.addMember(groupId, Number(user.id));
+          addSuccess = true;
+        } catch (addError: any) {
+          // 400 에러 (이미 멤버) 또는 500 에러 조용히 처리
+          console.log("멤버 추가 시도:", addError?.message);
+          
+          // 400 에러면 이미 멤버로 간주
+          if (addError?.status === 400) {
+            addSuccess = true; // 이미 멤버이므로 성공으로 간주
+          }
+        }
+
+        // 3. 그룹 목록 및 멤버 정보 새로고침
+        await loadMyGroups();
+        
+        try {
+          const group = await groupAPI.getGroup(groupId);
+          
+          toast({
+            title: "성공",
+            description: addSuccess ? "그룹에 참여했습니다." : "그룹 초대를 수락했습니다.",
+          });
+
+          setSelectedGroupForMembers(group);
+          setLoadingMembers(true);
+          
+          const members = await groupAPI.getMembers(groupId);
+          setGroupMembers(members);
+          setMembersDialogOpen(true);
+        } catch (error) {
+          console.error("그룹 정보 조회 실패:", error);
+          toast({
+            title: "오류",
+            description: "그룹 정보를 불러올 수 없습니다.",
+            variant: "destructive",
+          });
+        } finally {
+          setLoadingMembers(false);
+        }
+
+        navigate("/group-study", { replace: true });
       } catch (error: any) {
         console.error("초대 링크 처리 실패:", error);
         toast({
@@ -183,7 +195,6 @@ const GroupStudy: React.FC = () => {
     };
 
     handleInviteLink();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inviteGroupId, user, navigate]);
 
   // ✅ JWT 기반 그룹 로드
@@ -192,12 +203,37 @@ const GroupStudy: React.FC = () => {
 
     setLoading(true);
     try {
-      const groups = await groupAPI.getMyGroups();
+      // 1. 전체 그룹 조회
+      const allGroups = await groupAPI.getAllGroups();
+      
+      // 2. 각 그룹의 멤버 확인하여 내가 속한 그룹만 필터링
+      const myGroupIds = new Set<number>();
+      
+      await Promise.all(
+        allGroups.map(async (group) => {
+          try {
+            const members = await groupAPI.getMembers(group.id);
+            const isMember = members.some((m) => m.memberId === Number(user.id));
+            if (isMember) {
+              myGroupIds.add(group.id);
+            }
+          } catch (error) {
+            // 멤버 조회 실패한 그룹은 스킵
+            console.warn(`그룹 ${group.id} 멤버 조회 실패`);
+          }
+        })
+      );
+
+      // 3. 내가 속한 그룹만 필터링
+      const groups = allGroups.filter((g) => myGroupIds.has(g.id));
       setMyGroups(groups);
 
+      // 4. 각 그룹의 스터디룸 로드
       for (const group of groups) {
         await loadGroupRooms(group.id);
       }
+      
+      console.log("✅ 내 그룹 목록:", groups.length);
     } catch (error: any) {
       console.error("그룹 로드 에러:", error);
 
@@ -244,23 +280,11 @@ const GroupStudy: React.FC = () => {
 
     setLoading(true);
     try {
-      // 1. 그룹 생성
-      const createdGroup = await groupAPI.createGroup({
+      // ✅ Swagger 스펙: groupName만 필요
+      // 백엔드에서 생성자를 자동으로 멤버로 추가함
+      await groupAPI.createGroup({
         groupName: newGroup.groupName,
       });
-
-      // 2. ✅ 생성자를 멤버로 추가 (백엔드가 자동으로 안 해주는 경우 대비)
-      try {
-        // Profile에서 사용자 ID 가져오기
-        const profile = await authAPI.getProfile();
-        if (profile.id) {
-          await groupAPI.addMember(createdGroup.id, Number(profile.id));
-          console.log("멤버 추가 성공");
-        }
-      } catch (addError: any) {
-        console.warn("멤버 추가 실패 (이미 추가되었을 수 있음):", addError);
-        // 실패해도 계속 진행 (이미 멤버일 수 있음)
-      }
 
       toast({
         title: "성공",
@@ -280,7 +304,7 @@ const GroupStudy: React.FC = () => {
     }
   };
 
-  // ✅ JWT 기반 방 생성
+  // ✅ JWT 기반 방 생성 (creatorId 제거)
   const handleCreateRoom = async () => {
     if (!newRoom.roomName.trim() || selectedGroupId === null) {
       toast({
@@ -293,6 +317,7 @@ const GroupStudy: React.FC = () => {
 
     setLoading(true);
     try {
+      // ✅ Swagger 스펙: creatorId 제거
       const createdRoom = await studyRoomAPI.createRoom({
         groupId: selectedGroupId,
         roomName: newRoom.roomName,
@@ -313,7 +338,6 @@ const GroupStudy: React.FC = () => {
         studyField: "프로그래밍",
       });
 
-      // ✅ 생성 후 바로 이동
       navigate(`/group-study/room/${createdRoom.id}`);
     } catch (error: any) {
       toast({
@@ -326,11 +350,13 @@ const GroupStudy: React.FC = () => {
     }
   };
 
+  // ✅ 그룹 삭제 (userId 파라미터 제거)
   const handleDeleteGroup = async (groupId: number) => {
     if (!confirm("정말로 이 그룹을 삭제하시겠습니까?")) return;
 
     setLoading(true);
     try {
+      // ✅ Swagger 스펙: userId 파라미터 없음
       await groupAPI.deleteGroup(groupId);
       toast({ title: "성공", description: "그룹이 삭제되었습니다." });
       await loadMyGroups();
@@ -348,7 +374,16 @@ const GroupStudy: React.FC = () => {
   const handleJoinRoom = async (roomId: number) => {
     setLoading(true);
     try {
-      await studyRoomAPI.joinRoom(roomId);
+      if (!user?.id) {
+        toast({
+          title: "오류",
+          description: "로그인이 필요합니다.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      await studyRoomAPI.joinRoom(roomId, Number(user.id));
       toast({
         title: "성공",
         description: "스터디 방에 참여했습니다.",
@@ -358,9 +393,7 @@ const GroupStudy: React.FC = () => {
     } catch (error: any) {
       console.error("방 참여 에러:", error);
 
-      // ✅ 500 에러 처리 개선
       if (error?.message?.includes("500")) {
-        // 이미 참여 중일 수 있으니 일단 입장 시도
         toast({
           title: "알림",
           description: "이미 참여 중인 방입니다. 입장합니다.",
@@ -400,7 +433,6 @@ const GroupStudy: React.FC = () => {
       });
   };
 
-  // 그룹 멤버 로드
   const loadGroupMembers = async (group: Group) => {
     setSelectedGroupForMembers(group);
     setLoadingMembers(true);
@@ -420,15 +452,17 @@ const GroupStudy: React.FC = () => {
     }
   };
 
-  // 멤버 추방
+  // ✅ 멤버 추방 (requesterId 파라미터 required)
   const handleRemoveMember = async () => {
-    if (!memberToRemove || !selectedGroupForMembers) return;
+    if (!memberToRemove || !selectedGroupForMembers || !user) return;
 
     setLoading(true);
     try {
+      // ✅ Swagger 스펙: requesterId는 required 파라미터
       await groupAPI.removeMember(
         selectedGroupForMembers.id,
-        memberToRemove.memberId
+        memberToRemove.memberId,
+        Number(user.id) // ✅ requesterId 추가
       );
       toast({
         title: "성공",
@@ -436,7 +470,6 @@ const GroupStudy: React.FC = () => {
       });
       setRemoveMemberDialogOpen(false);
       setMemberToRemove(null);
-      // 멤버 목록 새로고침
       await loadGroupMembers(selectedGroupForMembers);
     } catch (error: any) {
       toast({
@@ -487,6 +520,37 @@ const GroupStudy: React.FC = () => {
           </div>
 
           <div className="flex space-x-3">
+            {/* 새로고침 버튼 */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={async () => {
+                setLoading(true);
+                await loadMyGroups();
+                toast({
+                  title: "새로고침 완료",
+                  description: "그룹 목록을 업데이트했습니다.",
+                });
+              }}
+              disabled={loading}
+              title="새로고침"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={loading ? "animate-spin" : ""}
+              >
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+              </svg>
+            </Button>
+
             <Dialog
               open={createGroupDialogOpen}
               onOpenChange={setCreateGroupDialogOpen}
@@ -711,6 +775,33 @@ const GroupStudy: React.FC = () => {
                           </CardDescription>
                         </div>
                         <div className="flex space-x-1">
+                          {/* 스터디룸 새로고침 버튼 */}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={async () => {
+                              await loadGroupRooms(group.id);
+                              toast({
+                                title: "새로고침 완료",
+                                description: `${group.groupName}의 스터디 방 목록을 업데이트했습니다.`,
+                              });
+                            }}
+                            title="스터디 방 새로고침"
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                            </svg>
+                          </Button>
                           <Button
                             size="sm"
                             variant="ghost"
@@ -784,13 +875,11 @@ const GroupStudy: React.FC = () => {
 
               {/* 스터디 목록 */}
               {(() => {
-                // 필터링된 그룹 목록
                 const filteredGroups =
                   selectedGroupFilter === "all"
                     ? myGroups
                     : myGroups.filter((g) => g.id === selectedGroupFilter);
 
-                // 모든 스터디룸을 평탄화하여 표시
                 const allRooms: Array<GroupStudyRoom & { groupName: string }> = [];
                 filteredGroups.forEach((group) => {
                   const rooms = groupRooms[group.id] || [];
@@ -924,7 +1013,6 @@ const GroupStudy: React.FC = () => {
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* 방장인 경우 초대 링크 복사 버튼 */}
             {selectedGroupForMembers &&
               user &&
               selectedGroupForMembers.leaderId === Number(user.id) && (
@@ -949,7 +1037,6 @@ const GroupStudy: React.FC = () => {
                 </div>
               )}
 
-            {/* 멤버 목록 */}
             <div className="border rounded-lg">
               {loadingMembers ? (
                 <div className="p-8 text-center">
@@ -1022,7 +1109,6 @@ const GroupStudy: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* 방장인 경우 추방 버튼 표시 (본인 제외) */}
                         {selectedGroupForMembers &&
                           user &&
                           selectedGroupForMembers.leaderId ===

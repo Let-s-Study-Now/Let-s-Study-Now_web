@@ -1,13 +1,158 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Users, BookOpen, CheckSquare, Clock } from "lucide-react";
 import Navbar from "@/components/Navbar";
+import { checklistAPI, Checklist, sessionAPI } from "@/lib/api";
+
 
 const Index = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [todayChecklists, setTodayChecklists] = useState<Checklist[]>([]);
+  const [loadingChecklists, setLoadingChecklists] = useState(false);
+  const [weeklyStudyTime, setWeeklyStudyTime] = useState<number>(0);
+  const [consecutiveAttendance, setConsecutiveAttendance] = useState<number>(0);
+  const [loadingStats, setLoadingStats] = useState(false);
+
+  // 오늘 날짜의 체크리스트 로드 (초기 로드 시에만 로딩 표시)
+  useEffect(() => {
+    if (user) {
+      loadTodayChecklists(true); // 초기 로드 시에만 로딩 표시
+      loadStatistics();
+    }
+  }, [user]);
+
+// 통계 로드 함수에서 localStorage 직접 읽도록 변경
+const loadStatistics = async () => {
+  if (!user) return;
+  setLoadingStats(true);
+
+  try {
+  } catch (error) {
+    console.warn("⚠️ API statistics failed:", error);
+  }
+
+  // ⛔ studyStats 대체 로직 — localStorage 직접 읽기
+  try {
+    if (user.id) {
+      const userKey = `studyStats_${user.id}`;
+      const saved = localStorage.getItem(userKey);
+
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setWeeklyStudyTime(parsed.weeklyStudyTime || 0);
+        setConsecutiveAttendance(parsed.consecutiveAttendance || 0);
+      } else {
+        setWeeklyStudyTime(0);
+        setConsecutiveAttendance(0);
+      }
+    }
+  } catch (e) {
+    console.error("Failed to load local statistics:", e);
+    setWeeklyStudyTime(0);
+    setConsecutiveAttendance(0);
+  }
+
+  setLoadingStats(false);
+};
+
+  // 시간 포맷팅 함수
+  const formatTime = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+  };
+
+  // 페이지 포커스/가시성 변경 시 체크리스트와 통계 다시 로드
+  useEffect(() => {
+    if (!user) return;
+
+    const handleFocus = () => {
+      loadTodayChecklists(false); // 포커스 시에는 로딩 표시 안 함
+      loadStatistics();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        loadTodayChecklists(false); // 가시성 변경 시에는 로딩 표시 안 함
+        loadStatistics();
+      }
+    };
+
+    // 체크리스트 업데이트 이벤트 리스너 (체크리스트 페이지에서 체크 시 발생)
+    const handleChecklistUpdate = () => {
+      loadTodayChecklists(false); // 이벤트 기반 업데이트 시에는 로딩 표시 안 함
+    };
+
+    // 주기적으로 통계만 업데이트 (30초마다, 체크리스트는 이벤트 기반으로만 업데이트)
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        loadStatistics();
+      }
+    }, 30000);
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("checklistUpdated", handleChecklistUpdate);
+    
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("checklistUpdated", handleChecklistUpdate);
+      clearInterval(interval);
+    };
+  }, [user]);
+
+  const formatDate = (date: Date) => {
+    return date.toISOString().split("T")[0];
+  };
+
+  const loadTodayChecklists = async (showLoading = false) => {
+    if (showLoading) {
+      setLoadingChecklists(true);
+    }
+    try {
+      const today = formatDate(new Date());
+      const checklistsData = await checklistAPI.getChecklists(today);
+      if (Array.isArray(checklistsData)) {
+        // API 응답의 isCompleted를 completed로 매핑
+        const mappedChecklists = checklistsData.map((item: any) => ({
+          ...item,
+          completed: item.isCompleted !== undefined ? item.isCompleted : item.completed,
+        }));
+        
+        // 데이터가 실제로 변경되었을 때만 상태 업데이트 (깜빡임 방지)
+        setTodayChecklists((prev) => {
+          const prevStr = JSON.stringify(prev);
+          const newStr = JSON.stringify(mappedChecklists);
+          if (prevStr === newStr) {
+            return prev; // 변경사항이 없으면 이전 상태 유지
+          }
+          return mappedChecklists;
+        });
+      } else {
+        setTodayChecklists([]);
+      }
+    } catch (error) {
+      console.error("Failed to load today's checklists:", error);
+      setTodayChecklists([]);
+    } finally {
+      if (showLoading) {
+        setLoadingChecklists(false);
+      }
+    }
+  };
+
+  // 체크리스트 통계 계산
+  const completedCount = todayChecklists.filter((c) => c.completed).length;
+  const totalCount = todayChecklists.length;
+  const completionRate = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const completionDegrees = (completionRate / 100) * 360;
 
   const studyHighlights = [
     {
@@ -196,8 +341,14 @@ const Index = () => {
               <div className="bg-white border border-indigo-100 rounded-2xl p-5 flex flex-col gap-4">
                 <div className="grid grid-cols-2 gap-3 text-center">
                   {[
-                    { label: "이번 주", value: "8h 30m" },
-                    { label: "연속 출석", value: "7일" },
+                    { 
+                      label: "이번 주", 
+                      value: loadingStats ? "로딩 중..." : formatTime(weeklyStudyTime)
+                    },
+                    { 
+                      label: "연속 출석", 
+                      value: loadingStats ? "로딩 중..." : `${consecutiveAttendance}일`
+                    },
                   ].map((stat) => (
                     <div
                       key={stat.label}
@@ -394,24 +545,42 @@ const Index = () => {
                   <>
                     <div className="rounded-2xl border-2 border-purple-200 bg-gradient-to-br from-purple-500/10 to-pink-500/10 p-5 shadow-md">
                       <p className="text-xs text-gray-500 font-medium">오늘 완료</p>
-                      <p className="text-2xl font-bold text-gray-900 mt-2">3 / 4</p>
-                      <p className="text-xs text-purple-600 mt-1 font-semibold">
-                        3개 완료
-                      </p>
+                      {loadingChecklists ? (
+                        <p className="text-2xl font-bold text-gray-900 mt-2">로딩 중...</p>
+                      ) : (
+                        <>
+                          <p className="text-2xl font-bold text-gray-900 mt-2">
+                            {completedCount} / {totalCount}
+                          </p>
+                          <p className="text-xs text-purple-600 mt-1 font-semibold">
+                            {completedCount}개 완료
+                          </p>
+                        </>
+                      )}
                     </div>
                     <div className="rounded-2xl border-2 border-purple-200 bg-white p-5 flex flex-col items-center justify-center shadow-md">
                       <div className="relative w-20 h-20">
-                        <div
-                          className="absolute inset-0 rounded-full"
-                          style={{
-                            background:
-                              "conic-gradient(#a855f7 0deg, #a855f7 270deg, #ede9fe 270deg)",
-                          }}
-                        />
-                        <div className="absolute inset-2 bg-white rounded-full flex flex-col items-center justify-center">
-                          <span className="text-xl font-bold text-gray-900">75%</span>
-                          <span className="text-[10px] text-gray-500">달성률</span>
-                        </div>
+                        {loadingChecklists ? (
+                          <div className="absolute inset-2 bg-white rounded-full flex flex-col items-center justify-center">
+                            <span className="text-xl font-bold text-gray-900">-</span>
+                            <span className="text-[10px] text-gray-500">달성률</span>
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              className="absolute inset-0 rounded-full"
+                              style={{
+                                background: totalCount > 0
+                                  ? `conic-gradient(#a855f7 0deg, #a855f7 ${completionDegrees}deg, #ede9fe ${completionDegrees}deg)`
+                                  : "conic-gradient(#ede9fe 0deg)",
+                              }}
+                            />
+                            <div className="absolute inset-2 bg-white rounded-full flex flex-col items-center justify-center">
+                              <span className="text-xl font-bold text-gray-900">{completionRate}%</span>
+                              <span className="text-[10px] text-gray-500">달성률</span>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   </>
@@ -437,44 +606,71 @@ const Index = () => {
                   </p>
                   {user ? (
                     <>
-                      <ul className="space-y-3 text-base text-gray-700">
-                        {[
-                          { task: "모닝 루틴 정리", status: "완료", completed: true },
-                          { task: "강의 복습", status: "진행 중", completed: false },
-                          { task: "문제 풀이 20문제", status: "진행 중", completed: false },
-                        ].map((item, idx) => (
-                          <li
-                            key={idx}
-                            className="flex items-center justify-between bg-slate-50 rounded-xl border-2 border-purple-200 px-4 py-3 shadow-sm"
-                          >
-                            <div className="flex items-center gap-3">
-                              <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs ${
-                                item.completed 
-                                  ? "bg-purple-500 text-white" 
-                                  : "bg-purple-50 text-purple-600"
-                              }`}>
-                                {item.completed ? "✓" : idx + 1}
+                      {loadingChecklists ? (
+                        <div className="bg-slate-50 rounded-xl border-2 border-purple-200 px-4 py-8 text-center shadow-sm">
+                          <p className="text-base text-gray-500 font-medium">
+                            체크리스트를 불러오는 중...
+                          </p>
+                        </div>
+                      ) : todayChecklists.length === 0 ? (
+                        <div className="bg-slate-50 rounded-xl border-2 border-purple-200 px-4 py-8 text-center shadow-sm">
+                          <p className="text-base text-gray-500 font-medium">
+                            오늘의 체크리스트가 없습니다
+                          </p>
+                          <p className="text-sm text-gray-400 mt-2">
+                            체크리스트를 추가해보세요!
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <ul className="space-y-3 text-base text-gray-700">
+                            {todayChecklists.slice(0, 3).map((checklist, idx) => (
+                              <li
+                                key={checklist.id}
+                                className="flex items-center justify-between bg-slate-50 rounded-xl border-2 border-purple-200 px-4 py-3 shadow-sm"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs ${
+                                    checklist.completed 
+                                      ? "bg-purple-500 text-white" 
+                                      : "bg-purple-50 text-purple-600"
+                                  }`}>
+                                    {checklist.completed ? "✓" : idx + 1}
+                                  </span>
+                                  <span className={checklist.completed ? "line-through text-gray-400" : ""}>
+                                    {checklist.content}
+                                  </span>
+                                </div>
+                                <span className={`text-xs ${
+                                  checklist.completed ? "text-purple-600 font-semibold" : "text-gray-500"
+                                }`}>
+                                  {checklist.completed ? "완료" : "진행 중"}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                          {todayChecklists.length > 3 && (
+                            <p className="text-xs text-gray-500 mt-2 text-center">
+                              외 {todayChecklists.length - 3}개 더...
+                            </p>
+                          )}
+                          {completedCount > 0 && (
+                            <div className="flex items-center gap-3 text-sm text-gray-600 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border-2 border-purple-200 px-4 py-3 mt-4 shadow-sm">
+                              <span className="inline-flex items-center gap-1 text-purple-600 font-bold">
+                                {completedCount}개 완료
                               </span>
-                              <span className={item.completed ? "line-through text-gray-400" : ""}>
-                                {item.task}
-                              </span>
+                              {totalCount > 0 && (
+                                <>
+                                  <span>·</span>
+                                  <span className="font-medium">
+                                    달성률 {completionRate}%
+                                  </span>
+                                </>
+                              )}
                             </div>
-                            <span className={`text-xs ${
-                              item.completed ? "text-purple-600 font-semibold" : "text-gray-500"
-                            }`}>
-                              {item.status}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                      <div className="flex items-center gap-3 text-sm text-gray-600 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border-2 border-purple-200 px-4 py-3 mt-4 shadow-sm">
-                        <span className="inline-flex items-center gap-1 text-purple-600 font-bold">
-                          +1
-                          <span className="text-gray-600 font-medium">집중 뱃지</span>
-                        </span>
-                        <span>·</span>
-                        <span className="font-medium">연속 4일 달성 중</span>
-                      </div>
+                          )}
+                        </>
+                      )}
                     </>
                   ) : (
                     <div className="bg-slate-50 rounded-xl border-2 border-purple-200 px-4 py-8 text-center shadow-sm">

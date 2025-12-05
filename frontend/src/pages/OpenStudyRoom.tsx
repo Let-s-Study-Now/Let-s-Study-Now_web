@@ -27,8 +27,15 @@ import {
   sessionAPI, 
   SessionStartRequestDto,
   SessionEndResultDto,
-  LevelInfoDto
+  LevelInfoDto,
+  chatAPI,
+  ChatMessage as APIChatMessage,
 } from "@/lib/api";
+import {
+  webSocketService,
+  WebSocketMessage,
+  MessageType,
+} from "@/lib/websocket";
 import {
   Users,
   Clock,
@@ -48,12 +55,18 @@ import {
   X,
   CheckCircle,
   AlertCircle,
+  Music,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
 
 interface ChatMessage {
-  id: string;
-  type: "text" | "image" | "file" | "system" | "question";
-  sender?: string;
+  id: number;
+  type: MessageType;
+  sender: string;
+  senderId?: number;
+  senderProfileImage?: string;
   content: string;
   imageUrl?: string;
   fileName?: string;
@@ -61,6 +74,8 @@ interface ChatMessage {
   timestamp: Date;
   answers?: HelpAnswer[];
   status?: "open" | "helping" | "resolved";
+  refId?: number;
+  isSolved?: boolean;
 }
 
 interface Participant {
@@ -71,8 +86,10 @@ interface Participant {
 }
 
 interface HelpAnswer {
-  id: string;
+  id: number;
   answerer: string;
+  answererId?: number;
+  answererProfileImage?: string;
   content: string;
   timestamp: Date;
   isAccepted?: boolean;
@@ -124,7 +141,7 @@ const OpenStudyRoomPage: React.FC = () => {
   const [questionFileName, setQuestionFileName] = useState<string | null>(null);
 
   // Answer input for specific question
-  const [answerInputs, setAnswerInputs] = useState<Record<string, string>>({});
+  const [answerInputs, setAnswerInputs] = useState<Record<number, string>>({});
 
   // Question list popover
   const [questionListOpen, setQuestionListOpen] = useState(false);
@@ -132,6 +149,23 @@ const OpenStudyRoomPage: React.FC = () => {
   // Dialogs
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
+
+  // Audio (백색소음 & 분위기 음악 & 자연음악)
+  const [audioType, setAudioType] = useState<"none" | "whiteNoise" | "ambient" | "nature">("none");
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [audioVolume, setAudioVolume] = useState(0.5);
+  const [audioDialogOpen, setAudioDialogOpen] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const whiteNoiseAudioContextRef = useRef<AudioContext | null>(null);
+  const whiteNoiseGainNodeRef = useRef<GainNode | null>(null);
+  const whiteNoiseSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  // Pomodoro Timer
+  const [pomodoroMode, setPomodoroMode] = useState<"work" | "shortBreak" | "longBreak">("work");
+  const [pomodoroTime, setPomodoroTime] = useState(25 * 60);
+  const [pomodoroIsRunning, setPomodoroIsRunning] = useState(false);
+  const [pomodoroCycle, setPomodoroCycle] = useState(1);
+  const pomodoroIntervalRef = useRef<any>(null);
 
   // 시간 포맷 함수
   const formatTime = (seconds: number) => {
@@ -189,15 +223,13 @@ const OpenStudyRoomPage: React.FC = () => {
       intervalRef.current = null;
     }
 
-    // ✅ "공부중" 상태일 때만 타이머 시작
+    // "공부중" 상태일 때만 타이머 시작
     if (myStatus === "studying") {
-      // ✅ 함수형 업데이트를 사용하여 항상 최신 상태를 참조
       intervalRef.current = setInterval(() => {
         setCurrentSeconds((prevSeconds) => prevSeconds + 1);
       }, 1000);
     }
 
-    // 메모리 누수 방지를 위한 클린업
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -206,31 +238,336 @@ const OpenStudyRoomPage: React.FC = () => {
     };
   }, [myStatus]);
 
-  // 방 입장 처리
+  // 오디오 cleanup
+  useEffect(() => {
+    return () => {
+      // 컴포넌트 언마운트 시 오디오 정리
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, [audioType]);
+
+    // 참여자 새로고침 (5초마다)
+  useEffect(() => {
+    if (!roomId || !roomInfo) return;
+
+    const refresh = async () => {
+      try {
+        const pList = await openStudyAPI.getParticipants(roomId);
+        console.log("🔄 Participants count:", pList.length);
+        
+        if (Array.isArray(pList)) {
+          const participantList = pList.map((p: any) => ({
+            id: p.memberId?.toString() || p.id?.toString(),
+            username: p.memberId === roomInfo.createdBy 
+              ? roomInfo.creatorUsername 
+              : `사용자${p.memberId}`,
+            status: "studying" as const,
+            isCreator: p.memberId === roomInfo.createdBy,
+          }));
+          
+          setParticipants(participantList);
+        }
+      } catch (e) {
+        console.error("Failed to refresh participants:", e);
+      }
+    };
+
+    // 즉시 한 번 실행
+    refresh();
+
+    // 5초마다 새로고침
+    const interval = setInterval(refresh, 5000);
+    return () => clearInterval(interval);
+  }, [roomId, roomInfo]);
+
+  // 뽀모도로 타이머
+  useEffect(() => {
+    if (pomodoroIntervalRef.current) {
+      clearInterval(pomodoroIntervalRef.current);
+      pomodoroIntervalRef.current = null;
+    }
+
+    if (pomodoroIsRunning && pomodoroTime > 0) {
+      pomodoroIntervalRef.current = setInterval(() => {
+        setPomodoroTime((prev) => {
+          if (prev <= 1) {
+            setPomodoroIsRunning(false);
+
+            if (pomodoroMode === "work") {
+              toast({
+                title: "🎉 작업 완료!",
+                description: "휴식을 취하세요!",
+              });
+
+              if (pomodoroCycle === 4) {
+                setPomodoroMode("longBreak");
+                setPomodoroTime(15 * 60);
+                setPomodoroCycle(1);
+              } else {
+                setPomodoroMode("shortBreak");
+                setPomodoroTime(5 * 60);
+                setPomodoroCycle((prev) => prev + 1);
+              }
+            } else {
+              toast({
+                title: "휴식 완료",
+                description: "다시 공부를 시작하세요!",
+              });
+              setPomodoroMode("work");
+              setPomodoroTime(25 * 60);
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (pomodoroIntervalRef.current) {
+        clearInterval(pomodoroIntervalRef.current);
+        pomodoroIntervalRef.current = null;
+      }
+    };
+  }, [pomodoroIsRunning, pomodoroTime, pomodoroMode, pomodoroCycle]);
+
+  // WebSocket 메시지 수신 처리
+  const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
+    console.log("📩 WebSocket message received:", wsMessage);
+
+    const messageId = wsMessage.id || wsMessage.messageId || 0;
+
+    const newMessage: ChatMessage = {
+      id: messageId,
+      type: wsMessage.type,
+      sender: wsMessage.sender,
+      senderId: undefined,
+      senderProfileImage: undefined,
+      content: wsMessage.message,
+      imageUrl: wsMessage.imageUrl,
+      timestamp: new Date(wsMessage.sentAt),
+      refId: wsMessage.refId,
+      isSolved: wsMessage.isSolved,
+    };
+
+    if (wsMessage.type === "QUESTION") {
+      newMessage.status = "open";
+      newMessage.answers = [];
+      console.log("➕ Adding QUESTION message:", newMessage);
+      setMessages((prev) => [...prev, newMessage]);
+      
+    } else if (wsMessage.type === "ANSWER") {
+      console.log("💬 ANSWER received:", {
+        id: messageId,
+        refId: wsMessage.refId,
+        sender: wsMessage.sender,
+        message: wsMessage.message,
+      });
+
+      if (!wsMessage.refId) {
+        console.error("❌ ANSWER has no refId!");
+        return;
+      }
+
+      setMessages((prev) => {
+        const updated = prev.map((msg) => {
+          if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
+            console.log("✅ Found matching QUESTION:", msg.id);
+
+            const newAnswer: HelpAnswer = {
+              id: messageId,
+              answerer: wsMessage.sender,
+              answererId: undefined,
+              answererProfileImage: undefined,
+              content: wsMessage.message,
+              timestamp: new Date(wsMessage.sentAt),
+              isAccepted: false,
+            };
+
+            console.log("➕ Adding answer to question:", newAnswer);
+
+            return {
+              ...msg,
+              answers: [...(msg.answers || []), newAnswer],
+              status: "helping" as const,
+            };
+          }
+          return msg;
+        });
+
+        console.log("📦 Updated messages:", updated);
+        return updated;
+      });
+      
+    } else if (wsMessage.type === "SOLVE") {
+      console.log("✅ SOLVE message received:", wsMessage);
+
+      if (wsMessage.refId) {
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
+              console.log("✅ Marking question as SOLVED:", msg.id);
+              return {
+                ...msg,
+                status: "resolved" as const,
+                isSolved: true,
+              };
+            }
+            return msg;
+          })
+        );
+      }
+      
+      addSystemMessage(wsMessage.message);
+      
+    } else if (wsMessage.type === "SYSTEM") {
+      addSystemMessage(wsMessage.message);
+      
+    } else {
+      console.log("➕ Adding TALK message:", newMessage);
+      setMessages((prev) => [...prev, newMessage]);
+    }
+  };
+
+  // 채팅 내역 불러오기
+  const loadChatHistory = async (roomIdNum: number) => {
+    try {
+      const response = await chatAPI.getChatHistory(roomIdNum, "OPEN", 0);
+      
+      console.log("📦 Chat history response:", response);
+      
+      if (!Array.isArray(response)) {
+        console.warn("⚠️ Chat history is not an array:", response);
+        setMessages([]);
+        return;
+      }
+      
+      if (response.length === 0) {
+        console.log("✅ No chat history found");
+        setMessages([]);
+        return;
+      }
+      
+      const loadedMessages: ChatMessage[] = response.map((apiMsg) => {
+        const baseMessage: ChatMessage = {
+          id: apiMsg.id,
+          type: apiMsg.type,
+          sender: apiMsg.sender,
+          senderId: undefined,
+          senderProfileImage: undefined,
+          content: apiMsg.message,
+          imageUrl: apiMsg.imageUrl,
+          timestamp: new Date(apiMsg.sentAt),
+          refId: apiMsg.refId,
+          isSolved: apiMsg.isSolved,
+        };
+
+        if (apiMsg.type === "QUESTION") {
+          baseMessage.status = apiMsg.isSolved ? "resolved" : "open";
+          baseMessage.answers = [];
+        }
+
+        return baseMessage;
+      });
+
+      loadedMessages.forEach((msg) => {
+        if (msg.type === "ANSWER" && msg.refId) {
+          const questionMsg = loadedMessages.find(
+            (m) => m.id === msg.refId && m.type === "QUESTION"
+          );
+          if (questionMsg) {
+            const answer: HelpAnswer = {
+              id: msg.id,
+              answerer: msg.sender,
+              answererId: undefined,
+              answererProfileImage: undefined,
+              content: msg.content,
+              timestamp: msg.timestamp,
+            };
+            if (!questionMsg.answers) questionMsg.answers = [];
+            questionMsg.answers.push(answer);
+            if (questionMsg.answers.length > 0 && !questionMsg.isSolved) {
+              questionMsg.status = "helping";
+            }
+          }
+        }
+      });
+
+      const filteredMessages = loadedMessages.filter(
+        (msg) => msg.type !== "ANSWER"
+      );
+
+      setMessages(filteredMessages);
+      console.log("✅ Chat history loaded:", filteredMessages.length, "messages");
+    } catch (error) {
+      console.error("❌ Failed to load chat history:", error);
+      setMessages([]);
+    }
+  };
+
+  // ✅ 방 입장 로직 개선 - 새로고침 처리 강화
   useEffect(() => {
     if (!user || !roomId || hasJoinedRef.current) return;
 
     const joinRoom = async () => {
       try {
         setLoading(true);
-        console.log("Attempting to join room:", roomId);
+        console.log("🚪 Attempting to join room:", roomId);
 
+        // 1. 방 정보 조회
         let roomData: OpenStudyRoom;
         try {
           roomData = await openStudyAPI.getRoom(roomId);
-          console.log("Room data loaded:", roomData);
+          console.log("✅ Room data loaded:", roomData);
           setRoomInfo(roomData);
 
-          setParticipants([
-            {
-              id: "creator",
-              username: roomData.creatorUsername || "방장",
-              status: "studying",
-              isCreator: true,
-            },
-          ]);
+          // 참여자 목록 로드
+          try {
+            const pList = await openStudyAPI.getParticipants(roomId);
+            console.log("📋 Participants API response:", pList);
+            
+            if (Array.isArray(pList) && pList.length > 0) {
+              const participantList = pList.map((p: any) => ({
+                id: p.memberId?.toString() || p.id?.toString(),
+                username: p.memberId === roomData.createdBy 
+                  ? roomData.creatorUsername 
+                  : `사용자${p.memberId}`,
+                status: "studying" as const,
+                isCreator: p.memberId === roomData.createdBy,
+              }));
+              
+              console.log("✅ Mapped participants:", participantList);
+              setParticipants(participantList);
+            } else {
+              // 참여자 목록이 비어있으면 방장만 추가
+              setParticipants([
+                {
+                  id: "creator",
+                  username: roomData.creatorUsername || "방장",
+                  status: "studying",
+                  isCreator: true,
+                },
+              ]);
+            }
+          } catch (e) {
+            console.error("Failed to load participants:", e);
+            // 참여자 로드 실패해도 방 입장은 계속
+            setParticipants([
+              {
+                id: "creator",
+                username: roomData.creatorUsername || "방장",
+                status: "studying",
+                isCreator: true,
+              },
+            ]);
+          }
         } catch (error: any) {
-          console.error("Failed to get room info:", error);
+          console.error("❌ Failed to get room info:", error);
           toast({
             title: "오류",
             description: "방 정보를 불러올 수 없습니다.",
@@ -240,65 +577,39 @@ const OpenStudyRoomPage: React.FC = () => {
           return;
         }
 
-        // ✅ 방 생성자인지 확인
+        // 2. 방장 여부 확인
         const isCreator =
           roomData.creatorUsername === user.username ||
           (roomData.createdBy && roomData.createdBy === user.id);
 
-        // ✅ 생성자가 아닐 때만 joinRoom 호출
+        console.log("👤 User role:", isCreator ? "방장" : "참여자");
+
+        // 3. 비방장만 입장 API 호출 (방장은 이미 입장되어 있음)
         if (!isCreator) {
           try {
             await openStudyAPI.joinRoom(roomId);
-            console.log("Successfully joined room via API");
+            console.log("✅ Successfully joined room via API");
           } catch (joinError: any) {
-            if (
-              joinError?.message?.includes("이미") ||
-              joinError?.message?.includes("already") ||
-              joinError?.message?.includes("409")
-            ) {
-              console.log("Already in room, continuing...");
+            const errorMsg = String(joinError?.message || "");
+            console.warn("⚠️ Join room API error:", errorMsg);
+
+            // 이미 참여 중인 경우 (409, "이미", "already" 등)
+            const isAlreadyJoinedError =
+              errorMsg.includes("409") ||
+              errorMsg.includes("이미") ||
+              errorMsg.toLowerCase().includes("already");
+
+            if (isAlreadyJoinedError) {
+              console.log("ℹ️ Already joined - treating as success (refresh scenario)");
+              // 에러를 무시하고 계속 진행 (새로고침 시나리오)
             } else {
+              // 진짜 에러 (방이 삭제됨, 정원 초과 등)
+              console.error("❌ Real join error:", errorMsg);
               throw joinError;
             }
           }
-        } else {
-          console.log("Room creator, skipping joinRoom call");
-        }
 
-        // ✅ 스터디 세션 시작 연동
-        try {
-          const roomIdNum = parseInt(roomId, 10);
-          if (!isNaN(roomIdNum)) {
-            console.log("Calling sessionAPI.startSession with:", { studyType: 'OPEN_STUDY', roomId: roomIdNum });
-            const sessionResponse = await sessionAPI.startSession({
-              studyType: 'OPEN_STUDY',
-              roomId: roomIdNum
-            });
-            console.log("Session API response:", sessionResponse);
-            
-            setSessionId(sessionResponse.sessionId);
-            setIsSessionActive(true);
-            setCurrentSeconds(0);
-            console.log("Session state updated:", {
-              sessionId: sessionResponse.sessionId,
-              isSessionActive: true
-            });
-          } else {
-            console.error("Invalid roomId:", roomId);
-          }
-        } catch (sessionError: any) {
-          console.error("Failed to start session:", sessionError);
-          console.error("Session error details:", {
-            message: sessionError?.message,
-            stack: sessionError?.stack
-          });
-          // 세션 시작 실패해도 방 입장은 계속 진행
-        }
-
-        localStorage.setItem("currentOpenStudyRoom", roomId);
-        hasJoinedRef.current = true;
-
-        if (roomData.creatorUsername !== user.username) {
+          // 비방장 자신을 참여자 목록에 추가
           setParticipants((prev) => [
             ...prev,
             {
@@ -310,7 +621,59 @@ const OpenStudyRoomPage: React.FC = () => {
           ]);
         }
 
-        addSystemMessage(`${user.username}님이 입장했습니다.`);
+        // 4. WebSocket 연결
+        const roomIdNum = parseInt(roomId, 10);
+        webSocketService.connect(
+          () => {
+            console.log("🔌 WebSocket connected successfully");
+            loadChatHistory(roomIdNum);
+            webSocketService.subscribe(roomIdNum, "OPEN", handleWebSocketMessage);
+          },
+          (error) => {
+            console.error("❌ WebSocket connection failed:", error);
+            toast({
+              title: "연결 오류",
+              description: "채팅 서버 연결에 실패했습니다.",
+              variant: "destructive",
+            });
+          }
+        );
+
+        // 5. 스터디 세션 시작
+        try {
+          if (!isNaN(roomIdNum)) {
+            console.log("⏱️ Starting session...");
+            const sessionResponse = await sessionAPI.startSession({
+              studyType: "OPEN_STUDY",
+              roomId: roomIdNum,
+            });
+            console.log("✅ Session started:", sessionResponse);
+
+            setSessionId(sessionResponse.sessionId);
+            setIsSessionActive(true);
+            setCurrentSeconds(0);
+          }
+        } catch (sessionError: any) {
+          const sessionMsg = String(sessionError?.message || "");
+          console.warn("⚠️ Session start error:", sessionMsg);
+
+          // 이미 활성 세션이 있는 경우
+          const isActiveSessionError =
+            sessionMsg.includes("이미") ||
+            sessionMsg.toLowerCase().includes("already active");
+
+          if (isActiveSessionError) {
+            console.log("ℹ️ Already has active session - continuing...");
+            // 세션 에러를 무시하고 계속 진행
+          } else {
+            console.warn("⚠️ Session error (non-critical):", sessionError);
+            // 세션 시작 실패해도 방 입장은 유지
+          }
+        }
+
+        // 6. 로컬 저장소에 현재 방 ID 저장
+        localStorage.setItem("currentOpenStudyRoom", roomId);
+        hasJoinedRef.current = true;
 
         toast({
           title: "입장 완료",
@@ -319,7 +682,7 @@ const OpenStudyRoomPage: React.FC = () => {
 
         setLoading(false);
       } catch (error: any) {
-        console.error("Failed to join room:", error);
+        console.error("❌ Failed to join room:", error);
 
         toast({
           title: "입장 실패",
@@ -327,6 +690,7 @@ const OpenStudyRoomPage: React.FC = () => {
           variant: "destructive",
         });
 
+        // 실패 시 로컬 저장소 정리
         localStorage.removeItem("currentOpenStudyRoom");
         setLoading(false);
         navigate("/open-study");
@@ -334,84 +698,80 @@ const OpenStudyRoomPage: React.FC = () => {
     };
 
     joinRoom();
+
+    // Cleanup: WebSocket 연결 해제
+    return () => {
+      if (roomId && hasJoinedRef.current) {
+        const roomIdNum = parseInt(roomId, 10);
+        if (!isNaN(roomIdNum)) {
+          webSocketService.unsubscribe(roomIdNum, "OPEN");
+        }
+        webSocketService.disconnect();
+      }
+    };
   }, [user, roomId, navigate]);
 
-  // 브라우저 이벤트 처리
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
-        isLeavingRef.current = true;
-        localStorage.removeItem("currentOpenStudyRoom");
+  // ✅ 수정된 코드 (새로고침 허용)
+useEffect(() => {
+  const handleBeforeUnload = () => {
+    if (!roomId || !hasJoinedRef.current || isLeavingRef.current) return;
 
-        const baseURL =
-          import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
-        const url = `${baseURL}/api/open-study/rooms/${roomId}/leave`;
+    console.log("🔄 Page refresh/close detected");
 
-        fetch(url, {
-          method: "POST",
-          credentials: "include",
-          keepalive: true,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        }).catch((err) => console.error("Failed to leave room:", err));
-      }
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
-        leaveRoom();
-      }
-    };
-  }, [roomId]);
-
-  const leaveRoom = async () => {
-    if (!roomId || isLeavingRef.current) return;
-    isLeavingRef.current = true;
-
-    try {
-      localStorage.removeItem("currentOpenStudyRoom");
-      await openStudyAPI.leaveRoom(roomId);
-      hasJoinedRef.current = false;
-    } catch (error) {
-      console.error("Failed to leave room:", error);
-      localStorage.removeItem("currentOpenStudyRoom");
-      hasJoinedRef.current = false;
-    }
+    // ✅ 새로고침 시에는 서버에 leave 요청 안 함 (방장/비방장 공통)
+    // 로컬 저장소만 정리
+    localStorage.removeItem("currentOpenStudyRoom");
+    
+    console.log("✅ Keeping server-side room state for refresh");
   };
 
-  const deleteRoom = async () => {
+  window.addEventListener("beforeunload", handleBeforeUnload);
+
+  return () => {
+    window.removeEventListener("beforeunload", handleBeforeUnload);
+    
+    // ✅ 컴포넌트 언마운트 시 (라우터 이동)에만 실제 퇴장 처리
+    if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
+      console.log("🚪 Component unmounting (route change) → calling leaveRoom");
+      leaveRoom();
+    }
+  };
+}, [roomId]);
+
+  // 방 나가기 함수
+  const leaveRoom = async () => {
     if (!roomId || isLeavingRef.current) return;
+    
+    console.log("🚪 Leaving room:", roomId);
     isLeavingRef.current = true;
 
     try {
-      localStorage.removeItem("currentOpenStudyRoom");
-      await openStudyAPI.deleteRoom(roomId);
-      toast({
-        title: "방 삭제 완료",
-        description: "스터디 방이 삭제되었습니다.",
-      });
-      hasJoinedRef.current = false;
-    } catch (error: any) {
-      console.error("Failed to delete room:", error);
-      localStorage.removeItem("currentOpenStudyRoom");
-      hasJoinedRef.current = false;
-
-      // ✅ 500 에러 발생해도 방 나가기는 성공으로 처리
-      if (error?.message?.includes("500")) {
-        toast({
-          title: "방 나가기 완료",
-          description: "스터디룸에서 나왔습니다.",
-        });
-      } else {
-        toast({
-          title: "오류",
-          description: error?.message || "방 삭제에 실패했습니다.",
-          variant: "destructive",
-        });
+      // 뽀모도로 타이머 정리
+      if (pomodoroIntervalRef.current) {
+        clearInterval(pomodoroIntervalRef.current);
+        pomodoroIntervalRef.current = null;
       }
+      setPomodoroIsRunning(false);
+
+      // 오디오 정리
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setAudioType("none");
+      setIsAudioPlaying(false);
+
+      localStorage.removeItem("currentOpenStudyRoom");
+      await openStudyAPI.leaveRoom(roomId);
+      console.log("✅ Successfully left room");
+      hasJoinedRef.current = false;
+    } catch (error) {
+      console.error("❌ Failed to leave room:", error);
+      // 에러가 나도 로컬 상태는 정리
+      localStorage.removeItem("currentOpenStudyRoom");
+      hasJoinedRef.current = false;
     }
   };
 
@@ -424,9 +784,7 @@ const OpenStudyRoomPage: React.FC = () => {
         studySessions: prev.studySessions + 1,
       }));
       addSystemMessage(
-        `${
-          user?.username
-        }님이 휴식 모드로 전환했습니다. (공부 시간: ${formatTime(
+        `${user?.username}님이 휴식 모드로 전환했습니다. (공부 시간: ${formatTime(
           currentSeconds
         )})`
       );
@@ -454,64 +812,64 @@ const OpenStudyRoomPage: React.FC = () => {
     });
   };
 
-  const handleSendMessage = () => {
-    if (!messageInput.trim()) return;
+  // 메시지 전송 (WebSocket 사용)
+  const handleSendMessage = async () => {
+    if (!messageInput.trim() || !roomId) return;
 
-    if (isQuestionMode) {
-      // 질문 메시지 전송
-      const newMessage: ChatMessage = {
-        id: Date.now().toString(),
-        type: "question",
-        sender: user?.username || "익명",
-        content: messageInput,
-        imageUrl: questionImage || undefined,
-        fileName: questionFileName || undefined,
-        timestamp: new Date(),
-        answers: [],
-        status: "open",
-      };
+    try {
+      const roomIdNum = parseInt(roomId, 10);
 
-      setMessages((prev) => [...prev, newMessage]);
-      addSystemMessage(
-        `${user?.username}님이 질문했습니다: "${messageInput.slice(0, 30)}..."`
-      );
+      if (isQuestionMode) {
+        // TODO: 질문 이미지 업로드 연동
+        webSocketService.sendMessage({
+          type: "QUESTION",
+          roomType: "OPEN",
+          roomId: roomIdNum,
+          message: messageInput,
+        });
 
-      // 리셋
-      setMessageInput("");
-      setIsQuestionMode(false);
-      setQuestionImage(null);
-      setQuestionFileName(null);
+        setMessageInput("");
+        setIsQuestionMode(false);
+        setQuestionImage(null);
+        setQuestionFileName(null);
 
+        toast({
+          title: "질문 등록",
+          description: "질문이 등록되었습니다. 다른 참여자들이 답변해줄 거예요!",
+        });
+      } else {
+        webSocketService.sendMessage({
+          type: "TALK",
+          roomType: "OPEN",
+          roomId: roomIdNum,
+          message: messageInput,
+        });
+
+        setMessageInput("");
+      }
+    } catch (error: any) {
+      console.error("Failed to send message:", error);
       toast({
-        title: "질문 등록",
-        description: "질문이 등록되었습니다. 다른 참여자들이 답변해줄 거예요!",
+        title: "전송 실패",
+        description: error?.message || "메시지 전송에 실패했습니다.",
+        variant: "destructive",
       });
-    } else {
-      // 일반 텍스트 메시지 전송
-      const newMessage: ChatMessage = {
-        id: Date.now().toString(),
-        type: "text",
-        sender: user?.username || "익명",
-        content: messageInput,
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, newMessage]);
-      setMessageInput("");
     }
   };
 
   const addSystemMessage = (content: string) => {
     const newMessage: ChatMessage = {
-      id: Date.now().toString(),
-      type: "system",
+      id: Date.now(),
+      type: "SYSTEM",
+      sender: "SYSTEM",
       content,
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, newMessage]);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 이미지 업로드
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -524,24 +882,36 @@ const OpenStudyRoomPage: React.FC = () => {
       return;
     }
 
-    const imageUrl = URL.createObjectURL(file);
-
     if (isQuestionMode) {
-      // 질문 모드일 때는 첨부파일로 저장
+      const imageUrl = URL.createObjectURL(file);
       setQuestionImage(imageUrl);
       setQuestionFileName(file.name);
     } else {
-      // 일반 모드일 때는 바로 이미지 메시지 전송
-      const newMessage: ChatMessage = {
-        id: Date.now().toString(),
-        type: "image",
-        sender: user?.username || "익명",
-        content: "",
-        imageUrl,
-        timestamp: new Date(),
-      };
+      try {
+        const imageUrl = await chatAPI.uploadImage(file);
+        
+        if (roomId) {
+          const roomIdNum = parseInt(roomId, 10);
+          webSocketService.sendMessage({
+            type: "TALK",
+            roomType: "OPEN",
+            roomId: roomIdNum,
+            message: imageUrl,
+          });
+        }
 
-      setMessages((prev) => [...prev, newMessage]);
+        toast({
+          title: "이미지 전송 완료",
+          description: "이미지가 전송되었습니다.",
+        });
+      } catch (error: any) {
+        console.error("Failed to upload image:", error);
+        toast({
+          title: "업로드 실패",
+          description: error?.message || "이미지 업로드에 실패했습니다.",
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -558,84 +928,97 @@ const OpenStudyRoomPage: React.FC = () => {
       return;
     }
 
-    const newMessage: ChatMessage = {
-      id: Date.now().toString(),
-      type: "file",
-      sender: user?.username || "익명",
-      content: "",
-      fileName: file.name,
-      fileSize: file.size,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, newMessage]);
+    toast({
+      title: "준비중",
+      description: "파일 업로드 기능은 준비중입니다.",
+    });
   };
 
-  // 질문에 답변 추가
-  const handleSubmitAnswer = (questionId: string) => {
+  // 답변 제출 (WebSocket 사용)
+  const handleSubmitAnswer = (questionId: number) => {
+    console.log("🔍 handleSubmitAnswer called with questionId:", questionId);
+    
     const answerText = answerInputs[questionId];
-    if (!answerText?.trim()) return;
+    console.log("🔍 answerText:", answerText);
+    
+    if (!answerText?.trim() || !roomId) {
+      console.log("❌ Validation failed:", { answerText, roomId });
+      return;
+    }
 
-    const newAnswer: HelpAnswer = {
-      id: Date.now().toString(),
-      answerer: user?.username || "익명",
-      content: answerText,
-      timestamp: new Date(),
-    };
+    try {
+      const roomIdNum = parseInt(roomId, 10);
 
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.id === questionId && msg.type === "question"
-          ? {
-              ...msg,
-              answers: [...(msg.answers || []), newAnswer],
-              status: "helping" as const,
-            }
-          : msg
-      )
-    );
+      console.log("📤 Sending ANSWER with refId:", questionId);
 
-    // 답변 입력 초기화
-    setAnswerInputs((prev) => ({ ...prev, [questionId]: "" }));
+      webSocketService.sendMessage({
+        type: "ANSWER",
+        roomType: "OPEN",
+        roomId: roomIdNum,
+        message: answerText,
+        refId: questionId,
+      });
 
-    toast({
-      title: "답변 등록",
-      description: "답변이 등록되었습니다!",
-    });
+      setAnswerInputs((prev) => ({ ...prev, [questionId]: "" }));
+
+      toast({
+        title: "답변 등록",
+        description: "답변이 등록되었습니다!",
+      });
+    } catch (error: any) {
+      console.error("Failed to submit answer:", error);
+      toast({
+        title: "전송 실패",
+        description: error?.message || "답변 전송에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
   };
 
-  // 답변 채택
-  const handleAcceptAnswer = (questionId: string, answerId: string) => {
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.id === questionId && msg.type === "question"
-          ? {
-              ...msg,
-              answers: msg.answers?.map((ans) =>
-                ans.id === answerId ? { ...ans, isAccepted: true } : ans
-              ),
-              status: "resolved" as const,
-            }
-          : msg
-      )
-    );
+  // 답변 채택 (REST API 사용)
+  const handleAcceptAnswer = async (questionId: number, answerId: number) => {
+    try {
+      console.log("👑 Accepting answer:", { questionId, answerId });
 
-    toast({
-      title: "답변 채택 완료",
-      description: "답변이 채택되어 질문이 해결되었습니다! 🎉",
-    });
+      await chatAPI.solveQuestion(questionId, answerId);
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === questionId && msg.type === "QUESTION"
+            ? {
+                ...msg,
+                answers: msg.answers?.map((ans) =>
+                  ans.id === answerId ? { ...ans, isAccepted: true } : ans
+                ),
+                status: "resolved" as const,
+                isSolved: true,
+              }
+            : msg
+        )
+      );
+
+      toast({
+        title: "답변 채택 완료",
+        description: "답변이 채택되어 질문이 해결되었습니다! 🎉",
+      });
+    } catch (error: any) {
+      console.error("Failed to accept answer:", error);
+      toast({
+        title: "채택 실패",
+        description: error?.message || "답변 채택에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
   };
 
   // 질문으로 스크롤
-  const scrollToQuestion = (questionId: string) => {
+  const scrollToQuestion = (questionId: number) => {
     setQuestionListOpen(false);
-    
-    // 약간의 지연을 두고 스크롤 (팝오버가 닫히는 시간 확보)
+
     setTimeout(() => {
       const element = document.getElementById(`question-${questionId}`);
       if (element) {
         element.scrollIntoView({ behavior: "smooth", block: "center" });
-        // 하이라이트 효과
         element.classList.add("ring-4", "ring-red-300", "ring-opacity-50");
         setTimeout(() => {
           element.classList.remove("ring-4", "ring-red-300", "ring-opacity-50");
@@ -645,13 +1028,308 @@ const OpenStudyRoomPage: React.FC = () => {
   };
 
   // 질문 삭제
-  const handleDeleteQuestion = (questionId: string) => {
-    setMessages((prev) => prev.filter((msg) => msg.id !== questionId));
+  const handleDeleteQuestion = async (questionId: number) => {
+    try {
+      console.log("🗑️ Deleting question:", questionId);
+      
+      await chatAPI.deleteMessage(questionId);
 
+      setMessages((prev) => prev.filter((msg) => msg.id !== questionId));
+
+      toast({
+        title: "삭제 완료",
+        description: "질문이 삭제되었습니다.",
+      });
+    } catch (error: any) {
+      console.error("Failed to delete question:", error);
+      toast({
+        title: "삭제 실패",
+        description: error?.message || "질문 삭제에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // 백색소음 생성 함수
+  const generateWhiteNoise = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) {
+        toast({
+          title: "지원되지 않음",
+          description: "이 브라우저는 오디오를 지원하지 않습니다.",
+          variant: "destructive",
+        });
+        return false;
+      }
+
+      const audioContext = new AudioContextClass();
+      
+      // AudioContext가 suspended 상태일 수 있으므로 resume 시도
+      if (audioContext.state === "suspended") {
+        audioContext.resume();
+      }
+
+      const bufferSize = 4096;
+      const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+      const data = buffer.getChannelData(0);
+
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = audioVolume * 0.3; // 백색소음은 조금 낮게
+
+      source.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      whiteNoiseAudioContextRef.current = audioContext;
+      whiteNoiseGainNodeRef.current = gainNode;
+      whiteNoiseSourceRef.current = source;
+
+      source.start(0);
+      return true;
+    } catch (error) {
+      console.error("Failed to generate white noise:", error);
+      toast({
+        title: "백색소음 재생 실패",
+        description: "백색소음을 재생할 수 없습니다. 브라우저를 확인해주세요.",
+        variant: "destructive",
+      });
+      return false;
+    }
+  };
+
+  // 백색소음 정지
+  const stopWhiteNoise = () => {
+    try {
+      if (whiteNoiseSourceRef.current) {
+        whiteNoiseSourceRef.current.stop();
+        whiteNoiseSourceRef.current = null;
+      }
+      if (whiteNoiseAudioContextRef.current) {
+        whiteNoiseAudioContextRef.current.close();
+        whiteNoiseAudioContextRef.current = null;
+      }
+      whiteNoiseGainNodeRef.current = null;
+    } catch (error) {
+      console.error("Failed to stop white noise:", error);
+    }
+  };
+
+  // 오디오 재생/정지
+  const toggleAudio = () => {
+    if (audioType === "none") {
+      setAudioDialogOpen(true);
+      return;
+    }
+
+    if (isAudioPlaying) {
+      // 정지
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+      }
+      setIsAudioPlaying(false);
+    } else {
+      // 재생
+      if (audioType === "whiteNoise") {
+        if (generateWhiteNoise()) {
+          setIsAudioPlaying(true);
+        }
+      } else if (audioType === "ambient" || audioType === "nature") {
+        if (audioRef.current) {
+          audioRef.current.play().catch((error) => {
+            console.error("Failed to play audio:", error);
+            toast({
+              title: "재생 실패",
+              description: "음악을 재생할 수 없습니다.",
+              variant: "destructive",
+            });
+          });
+          setIsAudioPlaying(true);
+        }
+      }
+    }
+  };
+
+  // 오디오 타입 변경
+  const changeAudioType = (type: "none" | "whiteNoise" | "ambient" | "nature") => {
+    // 기존 오디오 정지
+    if (isAudioPlaying) {
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+      }
+      setIsAudioPlaying(false);
+    }
+
+    setAudioType(type);
+
+    if (type === "none") {
+      return;
+    }
+
+    // 새 오디오 시작
+    if (type === "whiteNoise") {
+      if (generateWhiteNoise()) {
+        setIsAudioPlaying(true);
+      }
+    } else if (type === "ambient") {
+      // 분위기 음악 URL - 원하는 음악 URL로 변경 가능
+      const ambientMusicUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+      
+      if (!audioRef.current) {
+        audioRef.current = new Audio(ambientMusicUrl);
+        audioRef.current.loop = true;
+        audioRef.current.volume = audioVolume;
+        audioRef.current.addEventListener("ended", () => {
+          setIsAudioPlaying(false);
+        });
+        audioRef.current.addEventListener("error", (e) => {
+          console.error("Audio error:", e);
+          toast({
+            title: "음악 재생 실패",
+            description: "음악 파일을 불러올 수 없습니다. 인터넷 연결을 확인해주세요.",
+            variant: "destructive",
+          });
+          setIsAudioPlaying(false);
+          setAudioType("none");
+        });
+      } else {
+        audioRef.current.src = ambientMusicUrl;
+        audioRef.current.volume = audioVolume;
+      }
+      
+      audioRef.current.play().catch((error) => {
+        console.error("Failed to play ambient music:", error);
+        toast({
+          title: "재생 실패",
+          description: "음악을 재생할 수 없습니다. 브라우저 설정을 확인해주세요.",
+          variant: "destructive",
+        });
+        setIsAudioPlaying(false);
+        setAudioType("none");
+      });
+      setIsAudioPlaying(true);
+    } else if (type === "nature") {
+      // 자연음악 URL - 원하는 자연음 URL로 변경 가능
+      const natureSoundUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3";
+      
+      if (!audioRef.current) {
+        audioRef.current = new Audio(natureSoundUrl);
+        audioRef.current.loop = true;
+        audioRef.current.volume = audioVolume;
+        audioRef.current.addEventListener("ended", () => {
+          setIsAudioPlaying(false);
+        });
+        audioRef.current.addEventListener("error", (e) => {
+          console.error("Audio error:", e);
+          toast({
+            title: "자연음 재생 실패",
+            description: "자연음 파일을 불러올 수 없습니다. 인터넷 연결을 확인해주세요.",
+            variant: "destructive",
+          });
+          setIsAudioPlaying(false);
+          setAudioType("none");
+        });
+      } else {
+        audioRef.current.src = natureSoundUrl;
+        audioRef.current.volume = audioVolume;
+      }
+      
+      audioRef.current.play().catch((error) => {
+        console.error("Failed to play nature sound:", error);
+        toast({
+          title: "재생 실패",
+          description: "자연음을 재생할 수 없습니다. 브라우저 설정을 확인해주세요.",
+          variant: "destructive",
+        });
+        setIsAudioPlaying(false);
+        setAudioType("none");
+      });
+      setIsAudioPlaying(true);
+    }
+  };
+
+  // 볼륨 변경
+  const handleVolumeChange = (value: number[]) => {
+    const newVolume = value[0] / 100;
+    setAudioVolume(newVolume);
+
+    if (audioType === "whiteNoise" && whiteNoiseGainNodeRef.current) {
+      whiteNoiseGainNodeRef.current.gain.value = newVolume * 0.3;
+    } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+      audioRef.current.volume = newVolume;
+    }
+  };
+
+    // 참여자 목록 새로고침 함수
+  const refreshParticipants = async () => {
+    if (!roomId || !roomInfo) return;
+    
+    try {
+      const pList = await openStudyAPI.getParticipants(roomId);
+      console.log("🔄 Participants refreshed:", pList.length);
+      
+      if (Array.isArray(pList)) {
+        const participantList = pList.map((p: any) => ({
+          id: p.memberId?.toString() || p.id?.toString(),
+          username: p.memberId === roomInfo.createdBy 
+            ? roomInfo.creatorUsername 
+            : `사용자${p.memberId}`,
+          status: "studying" as const,
+          isCreator: p.memberId === roomInfo.createdBy,
+        }));
+        
+        setParticipants(participantList);
+      }
+    } catch (error) {
+      console.error("Failed to refresh participants:", error);
+    }
+  };
+
+  // 뽀모도로 타이머 핸들러
+  const handlePomodoroStart = () => {
+    setPomodoroIsRunning(true);
+  };
+
+  const handlePomodoroPause = () => {
+    setPomodoroIsRunning(false);
+  };
+
+  const handlePomodoroReset = () => {
+    setPomodoroIsRunning(false);
+    if (pomodoroMode === "work") {
+      setPomodoroTime(25 * 60);
+    } else if (pomodoroMode === "shortBreak") {
+      setPomodoroTime(5 * 60);
+    } else {
+      setPomodoroTime(15 * 60);
+    }
     toast({
-      title: "삭제 완료",
-      description: "질문이 삭제되었습니다.",
+      title: "뽀모도로 리셋",
+      description: "타이머가 초기화되었습니다.",
     });
+  };
+
+  const handlePomodoroModeChange = (mode: "work" | "shortBreak" | "longBreak") => {
+    setPomodoroIsRunning(false);
+    setPomodoroMode(mode);
+    if (mode === "work") {
+      setPomodoroTime(25 * 60);
+    } else if (mode === "shortBreak") {
+      setPomodoroTime(5 * 60);
+    } else {
+      setPomodoroTime(15 * 60);
+    }
   };
 
   const handleCopyInviteLink = () => {
@@ -682,35 +1360,55 @@ const OpenStudyRoomPage: React.FC = () => {
       }
     }
 
-    // ✅ 스터디 세션 종료 연동
+    // 스터디 세션 종료
     if (sessionId !== null) {
       try {
         const endResult = await sessionAPI.endSession(sessionId);
         console.log("Session ended successfully:", endResult);
-        
-        // 레벨업 확인 및 축하 메시지
+
         if (endResult.leveledUp && endResult.newLevel !== null) {
           toast({
             title: "🎉 레벨업!",
             description: `축하합니다! 레벨 ${endResult.newLevel}이 되었습니다!`,
           });
         }
-        
-        // setInterval 정리 및 currentSeconds 초기화
+
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
         }
+        if (pomodoroIntervalRef.current) {
+          clearInterval(pomodoroIntervalRef.current);
+          pomodoroIntervalRef.current = null;
+        }
         setCurrentSeconds(0);
         setSessionId(null);
         setIsSessionActive(false);
+        setPomodoroIsRunning(false);
       } catch (sessionError: any) {
         console.error("Failed to end session:", sessionError);
-        // 세션 종료 실패해도 방 나가기는 계속 진행
       }
     }
 
-    // ✅ 방장이든 아니든 leaveRoom 호출 (백엔드에서 방장이면 방 자동 삭제)
+    // 오디오 정리
+    if (audioType === "whiteNoise") {
+      stopWhiteNoise();
+    } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setAudioType("none");
+    setIsAudioPlaying(false);
+
+    // WebSocket 연결 해제
+    if (roomId) {
+      const roomIdNum = parseInt(roomId, 10);
+      if (!isNaN(roomIdNum)) {
+        webSocketService.unsubscribe(roomIdNum, "OPEN");
+      }
+    }
+    webSocketService.disconnect();
+
     await leaveRoom();
     toast({
       title: isCreator ? "방 삭제 완료" : "방 나가기 완료",
@@ -753,10 +1451,34 @@ const OpenStudyRoomPage: React.FC = () => {
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-72 p-4">
-              <div className="space-y-3">
-                <h4 className="font-semibold text-sm text-gray-900">
-                  👥 참여자 목록
-                </h4>
+<div className="space-y-3">
+  {/* ✅ 이 부분을 수정 - h4를 flex 컨테이너로 감싸기 */}
+  <div className="flex items-center justify-between">
+    <h4 className="font-semibold text-sm text-gray-900">
+      👥 참여자 목록
+    </h4>
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={refreshParticipants}
+      className="h-7 w-7 p-0"
+      title="새로고침"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+      </svg>
+    </Button>
+  </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {participants.map((participant) => (
                     <div
@@ -847,7 +1569,7 @@ const OpenStudyRoomPage: React.FC = () => {
 
       {/* 메인 컨텐츠 */}
       <div className="flex-1 flex overflow-hidden">
-        {/* 왼쪽: 채팅 (전체 너비) */}
+        {/* 왼쪽: 채팅 */}
         <div className="flex-1 flex flex-col">
           {/* 상태 전환 + 타이머 */}
           <div className="border-b bg-white p-4">
@@ -911,8 +1633,401 @@ const OpenStudyRoomPage: React.FC = () => {
                 </Button>
               </div>
 
+              {/* 뽀모도로 타이머 */}
+              <div className="flex items-center gap-5 ml-4 px-5 py-3 bg-white rounded-xl border border-red-100 shadow-md hover:shadow-lg transition-all duration-200">
+                <div className="flex flex-col items-center">
+                  <span className="text-base font-semibold text-red-600 whitespace-nowrap tracking-wide uppercase">Pomodoro</span>
+                  <span className="text-xs text-gray-500 font-normal">뽀모도로</span>
+                </div>
+                
+                <div className="h-8 w-px bg-gradient-to-b from-transparent via-red-200 to-transparent"></div>
+                
+                <div className="flex items-center gap-2">
+                  <span className={`text-2xl font-mono font-semibold tabular-nums ${
+                    pomodoroIsRunning
+                      ? pomodoroMode === "work" ? "text-red-600" : "text-blue-500"
+                      : "text-gray-400"
+                  }`}>
+                    {formatTime(pomodoroTime)}
+                  </span>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <Badge 
+                    variant="secondary" 
+                    className={`text-xs font-medium px-2.5 py-1 whitespace-nowrap ${
+                      pomodoroMode === "work" 
+                        ? "bg-red-100 text-red-700 border border-red-200" 
+                        : pomodoroMode === "shortBreak"
+                        ? "bg-blue-100 text-blue-700 border border-blue-200"
+                        : "bg-green-100 text-green-700 border border-green-200"
+                    }`}
+                  >
+                    {pomodoroMode === "work" ? "작업" : pomodoroMode === "shortBreak" ? "짧은 휴식" : "긴 휴식"}
+                  </Badge>
+                  <Badge variant="outline" className="text-xs font-medium px-2.5 py-1 border-gray-300 text-gray-600 bg-gray-50">
+                    {pomodoroCycle}/4
+                  </Badge>
+                </div>
+                
+                <div className="h-8 w-px bg-gradient-to-b from-transparent via-gray-200 to-transparent"></div>
+                
+                <div className="flex items-center gap-1.5">
+                  {pomodoroIsRunning ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handlePomodoroPause}
+                      className="h-9 w-9 p-0 rounded-lg hover:bg-red-50 transition-colors"
+                      title="일시정지"
+                    >
+                      <Pause className="w-4 h-4 text-red-600" />
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handlePomodoroStart}
+                      className="h-9 w-9 p-0 rounded-lg hover:bg-red-50 transition-colors"
+                      title="시작"
+                    >
+                      <Play className="w-4 h-4 text-red-600" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePomodoroReset}
+                    className="h-9 w-9 p-0 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors"
+                    title="리셋"
+                  >
+                    <Clock className="w-4 h-4" />
+                  </Button>
+                </div>
+                
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 text-xs border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400 whitespace-nowrap transition-colors"
+                    >
+                      모드 변경
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-56 p-3 shadow-xl border-gray-200">
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-semibold text-gray-600 mb-3 px-1">Pomodoro Mode</div>
+                      <Button
+                        variant={pomodoroMode === "work" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "work"
+                            ? "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("work")}
+                      >
+                        <span className="mr-2">📚</span>
+                        작업 (25분)
+                      </Button>
+                      <Button
+                        variant={pomodoroMode === "shortBreak" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "shortBreak"
+                            ? "bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("shortBreak")}
+                      >
+                        <span className="mr-2">☕</span>
+                        짧은 휴식 (5분)
+                      </Button>
+                      <Button
+                        variant={pomodoroMode === "longBreak" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "longBreak"
+                            ? "bg-green-50 hover:bg-green-100 text-green-700 border border-green-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("longBreak")}
+                      >
+                        <span className="mr-2">🌴</span>
+                        긴 휴식 (15분)
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              {/* 음악 플레이어 */}
+              <Popover open={audioDialogOpen} onOpenChange={setAudioDialogOpen}>
+                <PopoverTrigger asChild>
+                  <div className={`group relative ml-4 px-4 py-2.5 bg-white rounded-2xl border-2 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer overflow-hidden ${
+                    isAudioPlaying 
+                      ? audioType === "whiteNoise" 
+                        ? "border-purple-300 bg-gradient-to-br from-purple-50 via-purple-50/80 to-white" 
+                        : audioType === "ambient"
+                        ? "border-blue-300 bg-gradient-to-br from-blue-50 via-blue-50/80 to-white"
+                        : audioType === "nature"
+                        ? "border-green-300 bg-gradient-to-br from-green-50 via-green-50/80 to-white"
+                        : "border-gray-200"
+                      : "border-gray-200 hover:border-gray-300"
+                  }`}>
+                    {/* 배경 효과 */}
+                    {isAudioPlaying && (
+                      <div className={`absolute inset-0 opacity-5 ${
+                        audioType === "whiteNoise" ? "bg-purple-400" 
+                        : audioType === "ambient" ? "bg-blue-400"
+                        : audioType === "nature" ? "bg-green-400"
+                        : ""
+                      }`}></div>
+                    )}
+                    
+                    <div className="relative flex items-center gap-3">
+                      {/* 음악 아이콘 */}
+                      <div className={`flex items-center justify-center w-10 h-10 rounded-xl transition-all duration-300 ${
+                        isAudioPlaying 
+                          ? audioType === "whiteNoise" 
+                            ? "bg-purple-100 text-purple-600 shadow-sm" 
+                            : audioType === "ambient"
+                            ? "bg-blue-100 text-blue-600 shadow-sm"
+                            : audioType === "nature"
+                            ? "bg-green-100 text-green-600 shadow-sm"
+                            : "bg-gray-100 text-gray-400"
+                          : "bg-gray-50 text-gray-400 group-hover:bg-gray-100"
+                      }`}>
+                        <Music className="w-5 h-5" />
+                      </div>
+                      
+                      {/* 상태 정보 */}
+                      <div className="flex flex-col min-w-0">
+                        <span className={`text-xs font-medium mb-0.5 ${
+                          isAudioPlaying 
+                            ? audioType === "whiteNoise" ? "text-purple-600" 
+                            : audioType === "ambient" ? "text-blue-600"
+                            : audioType === "nature" ? "text-green-600"
+                            : "text-gray-500"
+                            : "text-gray-500"
+                        }`}>
+                          {isAudioPlaying ? "재생 중" : "음악"}
+                        </span>
+                        <span className={`text-sm font-bold truncate ${
+                          isAudioPlaying
+                            ? audioType === "whiteNoise" ? "text-purple-700"
+                            : audioType === "ambient" ? "text-blue-700"
+                            : audioType === "nature" ? "text-green-700"
+                            : "text-gray-600"
+                            : "text-gray-400"
+                        }`}>
+                          {audioType === "whiteNoise" ? "백색소음" : audioType === "ambient" ? "분위기 음악" : audioType === "nature" ? "자연음악" : "OFF"}
+                        </span>
+                      </div>
+                      
+                      {/* 재생/일시정지 버튼 */}
+                      <div className="flex items-center gap-1.5 ml-auto">
+                        {isAudioPlaying ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleAudio();
+                            }}
+                            className={`h-8 w-8 p-0 rounded-lg transition-all duration-200 ${
+                              audioType === "whiteNoise" 
+                                ? "hover:bg-purple-100 text-purple-600 hover:scale-110" 
+                                : audioType === "ambient"
+                                ? "hover:bg-blue-100 text-blue-600 hover:scale-110"
+                                : audioType === "nature"
+                                ? "hover:bg-green-100 text-green-600 hover:scale-110"
+                                : "hover:bg-gray-100 text-gray-500"
+                            }`}
+                            title="일시정지"
+                          >
+                            <Pause className="w-4 h-4" />
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleAudio();
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg hover:bg-gray-100 text-gray-500 hover:scale-110 transition-all duration-200"
+                            title="재생"
+                          >
+                            <Play className="w-4 h-4" />
+                          </Button>
+                        )}
+                        
+                        {/* 선택 버튼 */}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAudioDialogOpen(true);
+                          }}
+                          className={`h-8 px-3 text-xs rounded-lg transition-all duration-200 ${
+                            isAudioPlaying
+                              ? audioType === "whiteNoise"
+                                ? "hover:bg-purple-100 text-purple-700 border border-purple-200"
+                                : audioType === "ambient"
+                                ? "hover:bg-blue-100 text-blue-700 border border-blue-200"
+                                : audioType === "nature"
+                                ? "hover:bg-green-100 text-green-700 border border-green-200"
+                                : "hover:bg-gray-100 text-gray-700 border border-gray-200"
+                              : "hover:bg-gray-100 text-gray-700 border border-gray-200"
+                          }`}
+                        >
+                          선택
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </PopoverTrigger>
+                <PopoverContent className="w-80 p-5 shadow-2xl border-gray-200/50 backdrop-blur-sm bg-white/95" onClick={(e) => e.stopPropagation()}>
+                  <div className="space-y-5">
+                    {/* 헤더 */}
+                    <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                      <h4 className="font-bold text-base text-gray-900 flex items-center gap-2">
+                        <div className={`p-1.5 rounded-lg ${
+                          isAudioPlaying 
+                            ? audioType === "whiteNoise" ? "bg-purple-100 text-purple-600" 
+                            : audioType === "ambient" ? "bg-blue-100 text-blue-600"
+                            : audioType === "nature" ? "bg-green-100 text-green-600"
+                            : "bg-gray-100 text-gray-500"
+                            : "bg-gray-100 text-gray-500"
+                        }`}>
+                          <Music className="w-4 h-4" />
+                        </div>
+                        <span>음악 선택</span>
+                      </h4>
+                      {isAudioPlaying && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={toggleAudio}
+                          className={`h-8 w-8 p-0 rounded-lg transition-all ${
+                            audioType === "whiteNoise" ? "hover:bg-purple-100 text-purple-600" 
+                            : audioType === "ambient" ? "hover:bg-blue-100 text-blue-600"
+                            : audioType === "nature" ? "hover:bg-green-100 text-green-600"
+                            : "hover:bg-gray-100 text-gray-500"
+                          }`}
+                        >
+                          <Pause className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+                    
+                    {/* 음악 타입 선택 */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <Button
+                        variant={audioType === "whiteNoise" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "whiteNoise" 
+                            ? "bg-gradient-to-br from-purple-50 to-purple-100 hover:from-purple-100 hover:to-purple-150 text-purple-700 border-2 border-purple-300 shadow-sm" 
+                            : "hover:border-purple-200 hover:bg-purple-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("whiteNoise");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🔊</span>
+                        <span className="text-xs font-semibold">백색소음</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "ambient" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "ambient" 
+                            ? "bg-gradient-to-br from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-150 text-blue-700 border-2 border-blue-300 shadow-sm" 
+                            : "hover:border-blue-200 hover:bg-blue-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("ambient");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🎵</span>
+                        <span className="text-xs font-semibold">분위기 음악</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "nature" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "nature" 
+                            ? "bg-gradient-to-br from-green-50 to-green-100 hover:from-green-100 hover:to-green-150 text-green-700 border-2 border-green-300 shadow-sm" 
+                            : "hover:border-green-200 hover:bg-green-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("nature");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🌿</span>
+                        <span className="text-xs font-semibold">자연음악</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "none" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "none"
+                            ? "bg-gray-100 border-2 border-gray-300"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("none");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🔇</span>
+                        <span className="text-xs font-semibold">끄기</span>
+                      </Button>
+                    </div>
+
+                    {/* 볼륨 조절 */}
+                    {audioType !== "none" && (
+                      <div className="space-y-3 pt-3 border-t border-gray-100">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-sm font-semibold flex items-center gap-2 ${
+                            audioType === "whiteNoise" ? "text-purple-700" 
+                            : audioType === "ambient" ? "text-blue-700"
+                            : audioType === "nature" ? "text-green-700"
+                            : "text-gray-700"
+                          }`}>
+                            {audioVolume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                            볼륨
+                          </span>
+                          <span className={`text-sm font-bold ${
+                            audioType === "whiteNoise" ? "text-purple-600" 
+                            : audioType === "ambient" ? "text-blue-600"
+                            : audioType === "nature" ? "text-green-600"
+                            : "text-gray-600"
+                          }`}>
+                            {Math.round(audioVolume * 100)}%
+                          </span>
+                        </div>
+                        <Slider
+                          value={[audioVolume * 100]}
+                          onValueChange={handleVolumeChange}
+                          max={100}
+                          step={1}
+                          className="w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
+
               <div className="ml-auto flex items-center gap-4 text-sm text-gray-600">
-                {/* 레벨 정보 표시 */}
                 {levelInfo && (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-indigo-50 to-sky-50 rounded-lg border border-indigo-200">
                     <span className="font-semibold text-indigo-700">
@@ -923,14 +2038,13 @@ const OpenStudyRoomPage: React.FC = () => {
                     </span>
                   </div>
                 )}
-                {/* 질문 개수 표시 - 팝오버로 변경 */}
-                {messages.filter(m => m.type === "question" && m.status !== "resolved").length > 0 && (
+                {messages.filter(m => m.type === "QUESTION" && m.status !== "resolved").length > 0 && (
                   <Popover open={questionListOpen} onOpenChange={setQuestionListOpen}>
                     <PopoverTrigger asChild>
                       <button className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-red-50 to-orange-50 rounded-lg border border-red-200 hover:shadow-md transition-all cursor-pointer">
                         <HelpCircle className="w-4 h-4 text-red-500" />
                         <span className="font-semibold text-red-700">
-                          질문 {messages.filter(m => m.type === "question" && m.status !== "resolved").length}개
+                          질문 {messages.filter(m => m.type === "QUESTION" && m.status !== "resolved").length}개
                         </span>
                       </button>
                     </PopoverTrigger>
@@ -942,7 +2056,7 @@ const OpenStudyRoomPage: React.FC = () => {
                         </h4>
                         <div className="space-y-2">
                           {messages
-                            .filter(m => m.type === "question" && m.status !== "resolved")
+                            .filter(m => m.type === "QUESTION" && m.status !== "resolved")
                             .map((question) => (
                               <div
                                 key={question.id}
@@ -1006,12 +2120,11 @@ const OpenStudyRoomPage: React.FC = () => {
             )}
             {messages.map((message) => (
               <div key={message.id}>
-                {message.type === "system" ? (
+                {message.type === "SYSTEM" ? (
                   <div className="text-center text-sm text-gray-500 py-2">
                     {message.content}
                   </div>
-                ) : message.type === "question" ? (
-                  // 질문 메시지
+                ) : message.type === "QUESTION" ? (
                   <div 
                     id={`question-${message.id}`}
                     className="bg-gradient-to-r from-red-50 to-orange-50 rounded-lg p-4 border-l-4 border-red-500 space-y-3 transition-all"
@@ -1019,6 +2132,9 @@ const OpenStudyRoomPage: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <div className="flex items-center space-x-2">
                         <Avatar className="w-8 h-8">
+                          {message.senderProfileImage ? (
+                            <AvatarImage src={message.senderProfileImage} />
+                          ) : null}
                           <AvatarFallback className="bg-red-500 text-white">
                             {message.sender?.charAt(0).toUpperCase()}
                           </AvatarFallback>
@@ -1046,10 +2162,7 @@ const OpenStudyRoomPage: React.FC = () => {
                             </Badge>
                           </div>
                           <span className="text-xs text-gray-500">
-                            {message.timestamp.toLocaleTimeString("ko-KR", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
+                            {formatRelativeTime(message.timestamp)}
                           </span>
                         </div>
                       </div>
@@ -1065,7 +2178,6 @@ const OpenStudyRoomPage: React.FC = () => {
                       )}
                     </div>
 
-                    {/* 질문 내용 */}
                     <div className="bg-white rounded-lg p-3 shadow-sm">
                       <div className="flex items-start gap-2">
                         <HelpCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
@@ -1073,7 +2185,6 @@ const OpenStudyRoomPage: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* 첨부 이미지 */}
                     {message.imageUrl && (
                       <div className="bg-white rounded-lg p-2">
                         <img
@@ -1085,7 +2196,6 @@ const OpenStudyRoomPage: React.FC = () => {
                       </div>
                     )}
 
-                    {/* 채택된 답변 (해결된 경우) */}
                     {message.status === "resolved" && message.answers && message.answers.some(ans => ans.isAccepted) && (
                       <div className="pl-7 space-y-2">
                         <div className="flex items-center gap-2 text-sm font-medium text-green-700">
@@ -1099,6 +2209,9 @@ const OpenStudyRoomPage: React.FC = () => {
                           >
                             <div className="flex items-center gap-2 mb-2">
                               <Avatar className="w-6 h-6">
+                                {answer.answererProfileImage ? (
+                                  <AvatarImage src={answer.answererProfileImage} />
+                                ) : null}
                                 <AvatarFallback className="bg-green-500 text-white text-xs">
                                   {answer.answerer.charAt(0).toUpperCase()}
                                 </AvatarFallback>
@@ -1121,7 +2234,6 @@ const OpenStudyRoomPage: React.FC = () => {
                       </div>
                     )}
 
-                    {/* 답변 목록 (해결되지 않은 경우) */}
                     {message.status !== "resolved" && message.answers && message.answers.length > 0 && (
                       <div className="space-y-2 pl-7">
                         <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
@@ -1136,6 +2248,9 @@ const OpenStudyRoomPage: React.FC = () => {
                             <div className="flex items-start justify-between gap-2 mb-2">
                               <div className="flex items-center gap-2">
                                 <Avatar className="w-6 h-6">
+                                  {answer.answererProfileImage ? (
+                                    <AvatarImage src={answer.answererProfileImage} />
+                                  ) : null}
                                   <AvatarFallback className="bg-blue-500 text-white text-xs">
                                     {answer.answerer.charAt(0).toUpperCase()}
                                   </AvatarFallback>
@@ -1147,7 +2262,6 @@ const OpenStudyRoomPage: React.FC = () => {
                                   {formatRelativeTime(answer.timestamp)}
                                 </span>
                               </div>
-                              {/* 질문 작성자만 채택 버튼 표시 */}
                               {message.sender === user?.username && (
                                 <Button
                                   variant="ghost"
@@ -1168,7 +2282,6 @@ const OpenStudyRoomPage: React.FC = () => {
                       </div>
                     )}
 
-                    {/* 답변 입력 (해결되지 않은 경우만) */}
                     {message.status !== "resolved" && (
                       <div className="pl-7 flex gap-2">
                         <Input
@@ -1196,9 +2309,11 @@ const OpenStudyRoomPage: React.FC = () => {
                     )}
                   </div>
                 ) : (
-                  // 일반 메시지
                   <div className="flex items-start space-x-3">
                     <Avatar className="w-8 h-8">
+                      {message.senderProfileImage ? (
+                        <AvatarImage src={message.senderProfileImage} />
+                      ) : null}
                       <AvatarFallback>
                         {message.sender?.charAt(0).toUpperCase()}
                       </AvatarFallback>
@@ -1209,53 +2324,22 @@ const OpenStudyRoomPage: React.FC = () => {
                           {message.sender}
                         </span>
                         <span className="text-xs text-gray-500">
-                          {message.timestamp.toLocaleTimeString("ko-KR", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                          {formatRelativeTime(message.timestamp)}
                         </span>
                       </div>
 
-                      {message.type === "text" && (
-                        <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
-                          <p className="text-gray-900">{message.content}</p>
-                        </div>
-                      )}
-
-                      {message.type === "image" && (
-                        <div className="bg-white rounded-lg p-2 shadow-sm">
+                      <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
+                        {message.imageUrl ? (
                           <img
                             src={message.imageUrl}
                             alt="uploaded"
                             className="max-w-xs rounded cursor-pointer hover:opacity-90"
                             onClick={() => window.open(message.imageUrl)}
                           />
-                        </div>
-                      )}
-
-                      {message.type === "file" && (
-                        <div className="bg-white rounded-lg px-4 py-3 shadow-sm flex items-center justify-between max-w-md">
-                          <div className="flex items-center space-x-3">
-                            <Paperclip className="w-5 h-5 text-gray-400" />
-                            <div>
-                              <p className="text-sm font-medium text-gray-900">
-                                {message.fileName}
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                {(
-                                  (message.fileSize || 0) /
-                                  1024 /
-                                  1024
-                                ).toFixed(2)}{" "}
-                                MB
-                              </p>
-                            </div>
-                          </div>
-                          <Button variant="ghost" size="sm">
-                            <Download className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      )}
+                        ) : (
+                          <p className="text-gray-900">{message.content}</p>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1266,7 +2350,6 @@ const OpenStudyRoomPage: React.FC = () => {
 
           {/* 채팅 입력 */}
           <div className="border-t bg-white p-4">
-            {/* 질문 모드 표시 */}
             {isQuestionMode && (
               <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
                 <div className="flex items-center gap-2">
