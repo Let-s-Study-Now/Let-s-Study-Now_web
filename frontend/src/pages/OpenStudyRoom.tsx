@@ -251,6 +251,40 @@ const OpenStudyRoomPage: React.FC = () => {
     };
   }, [audioType]);
 
+    // 참여자 새로고침 (5초마다)
+  useEffect(() => {
+    if (!roomId || !roomInfo) return;
+
+    const refresh = async () => {
+      try {
+        const pList = await openStudyAPI.getParticipants(roomId);
+        console.log("🔄 Participants count:", pList.length);
+        
+        if (Array.isArray(pList)) {
+          const participantList = pList.map((p: any) => ({
+            id: p.memberId?.toString() || p.id?.toString(),
+            username: p.memberId === roomInfo.createdBy 
+              ? roomInfo.creatorUsername 
+              : `사용자${p.memberId}`,
+            status: "studying" as const,
+            isCreator: p.memberId === roomInfo.createdBy,
+          }));
+          
+          setParticipants(participantList);
+        }
+      } catch (e) {
+        console.error("Failed to refresh participants:", e);
+      }
+    };
+
+    // 즉시 한 번 실행
+    refresh();
+
+    // 5초마다 새로고침
+    const interval = setInterval(refresh, 5000);
+    return () => clearInterval(interval);
+  }, [roomId, roomInfo]);
+
   // 뽀모도로 타이머
   useEffect(() => {
     if (pomodoroIntervalRef.current) {
@@ -492,15 +526,46 @@ const OpenStudyRoomPage: React.FC = () => {
           console.log("✅ Room data loaded:", roomData);
           setRoomInfo(roomData);
 
-          // 초기 참여자 목록 설정 (방장만)
-          setParticipants([
-            {
-              id: "creator",
-              username: roomData.creatorUsername || "방장",
-              status: "studying",
-              isCreator: true,
-            },
-          ]);
+          // 참여자 목록 로드
+          try {
+            const pList = await openStudyAPI.getParticipants(roomId);
+            console.log("📋 Participants API response:", pList);
+            
+            if (Array.isArray(pList) && pList.length > 0) {
+              const participantList = pList.map((p: any) => ({
+                id: p.memberId?.toString() || p.id?.toString(),
+                username: p.memberId === roomData.createdBy 
+                  ? roomData.creatorUsername 
+                  : `사용자${p.memberId}`,
+                status: "studying" as const,
+                isCreator: p.memberId === roomData.createdBy,
+              }));
+              
+              console.log("✅ Mapped participants:", participantList);
+              setParticipants(participantList);
+            } else {
+              // 참여자 목록이 비어있으면 방장만 추가
+              setParticipants([
+                {
+                  id: "creator",
+                  username: roomData.creatorUsername || "방장",
+                  status: "studying",
+                  isCreator: true,
+                },
+              ]);
+            }
+          } catch (e) {
+            console.error("Failed to load participants:", e);
+            // 참여자 로드 실패해도 방 입장은 계속
+            setParticipants([
+              {
+                id: "creator",
+                username: roomData.creatorUsername || "방장",
+                status: "studying",
+                isCreator: true,
+              },
+            ]);
+          }
         } catch (error: any) {
           console.error("❌ Failed to get room info:", error);
           toast({
@@ -1206,6 +1271,31 @@ useEffect(() => {
     }
   };
 
+    // 참여자 목록 새로고침 함수
+  const refreshParticipants = async () => {
+    if (!roomId || !roomInfo) return;
+    
+    try {
+      const pList = await openStudyAPI.getParticipants(roomId);
+      console.log("🔄 Participants refreshed:", pList.length);
+      
+      if (Array.isArray(pList)) {
+        const participantList = pList.map((p: any) => ({
+          id: p.memberId?.toString() || p.id?.toString(),
+          username: p.memberId === roomInfo.createdBy 
+            ? roomInfo.creatorUsername 
+            : `사용자${p.memberId}`,
+          status: "studying" as const,
+          isCreator: p.memberId === roomInfo.createdBy,
+        }));
+        
+        setParticipants(participantList);
+      }
+    } catch (error) {
+      console.error("Failed to refresh participants:", error);
+    }
+  };
+
   // 뽀모도로 타이머 핸들러
   const handlePomodoroStart = () => {
     setPomodoroIsRunning(true);
@@ -1349,9 +1439,7 @@ useEffect(() => {
         <div className="flex items-center space-x-4">
           <h1 className="text-2xl font-bold text-gray-900">{roomInfo.title}</h1>
           <Badge variant="secondary">{roomInfo.studyField}</Badge>
-        </div>
 
-        <div className="flex items-center space-x-4">
           {/* 참여자 수 팝오버 */}
           <Popover>
             <PopoverTrigger asChild>
@@ -1363,10 +1451,34 @@ useEffect(() => {
               </button>
             </PopoverTrigger>
             <PopoverContent className="w-72 p-4">
-              <div className="space-y-3">
-                <h4 className="font-semibold text-sm text-gray-900">
-                  👥 참여자 목록
-                </h4>
+<div className="space-y-3">
+  {/* ✅ 이 부분을 수정 - h4를 flex 컨테이너로 감싸기 */}
+  <div className="flex items-center justify-between">
+    <h4 className="font-semibold text-sm text-gray-900">
+      👥 참여자 목록
+    </h4>
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={refreshParticipants}
+      className="h-7 w-7 p-0"
+      title="새로고침"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+      </svg>
+    </Button>
+  </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {participants.map((participant) => (
                     <div
@@ -1433,7 +1545,9 @@ useEffect(() => {
               </div>
             </PopoverContent>
           </Popover>
+        </div>
 
+        <div className="flex items-center space-x-4">
           <Button
             variant="outline"
             size="sm"
