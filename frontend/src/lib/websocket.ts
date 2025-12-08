@@ -43,15 +43,15 @@ class WebSocketService {
    * @param onConnected 연결 성공 시 콜백
    * @param onError 에러 발생 시 콜백
    */
-    connect(onConnected?: () => void, onError?: (error: any) => void) {
+  connect(onConnected?: () => void, onError?: (error: any) => void) {
     if (this.client?.connected) {
       console.log("WebSocket already connected");
       onConnected?.();
       return;
     }
 
-    const API_BASE_URL = import.meta.env.VITE_API_URL;
-    const WS_URL = import.meta.env.VITE_WS_URL;  // ✅ 추가된 부분
+    const API_BASE_URL =
+      import.meta.env.VITE_API_URL || "http://localhost:8080"; // 환경변수로 변경
     const token = tokenManager.getToken();
 
     if (!token) {
@@ -60,14 +60,17 @@ class WebSocketService {
       return;
     }
 
+    // ✅ 연결 시도할 때 재연결 플래그 리셋
     this.shouldReconnect = true;
 
     this.client = new Client({
-      webSocketFactory: () => new SockJS(WS_URL), // ✅ 여기 변경됨
+      webSocketFactory: () => new SockJS(`${API_BASE_URL}/ws-stomp`), // 수정된 부분
       connectHeaders: {
         Authorization: `Bearer ${token}`,
       },
-      debug: (str) => console.log("[STOMP Debug]", str),
+      debug: (str) => {
+        console.log("[STOMP Debug]", str);
+      },
       reconnectDelay: this.reconnectDelay,
       heartbeatIncoming: 4000,
       heartbeatOutgoing: 4000,
@@ -87,15 +90,17 @@ class WebSocketService {
       },
       onDisconnect: () => {
         console.warn("⚠️ WebSocket Disconnected");
+        // ✅ shouldReconnect가 true일 때만 재연결 시도
         if (this.shouldReconnect) {
           this.handleReconnect(onConnected, onError);
+        } else {
+          console.log("🚫 Reconnection disabled - will not reconnect");
         }
       },
     });
 
     this.client.activate();
   }
-
 
   /**
    * 재연결 처리

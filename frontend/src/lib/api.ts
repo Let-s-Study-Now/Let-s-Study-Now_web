@@ -1,8 +1,8 @@
 // src/lib/api.ts
 
 // ✅ API 기본 설정
-const API_BASE_URL = import.meta.env.VITE_API_URL;
-
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL || "http://localhost:8080";
 
 // ✅ 토큰 관리 유틸리티 (export 필수!)
 export const tokenManager = {
