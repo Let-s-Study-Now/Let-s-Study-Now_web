@@ -180,117 +180,118 @@ const OpenStudy: React.FC = () => {
   };
 
   const handleCreateRoom = async () => {
-    if (!user) {
-      toast({
-        title: "로그인 필요",
-        description: "방을 생성하려면 로그인이 필요합니다.",
-        variant: "destructive",
-      });
-      return;
-    }
+  if (!user) {
+    toast({
+      title: "로그인 필요",
+      description: "방을 생성하려면 로그인이 필요합니다.",
+      variant: "destructive",
+    });
+    return;
+  }
 
-    if (!newRoom.title || !newRoom.studyField) {
+  if (!newRoom.title || !newRoom.studyField) {
+    toast({
+      title: "오류",
+      description: "방 제목과 공부 분야를 입력해주세요.",
+      variant: "destructive",
+    });
+    return;
+  }
+
+  if (newRoom.title.length < 1 || newRoom.title.length > 30) {
+    toast({
+      title: "오류",
+      description: "방 제목은 1-30자 이내여야 합니다.",
+      variant: "destructive",
+    });
+    return;
+  }
+
+  if (newRoom.maxParticipants < 2 || newRoom.maxParticipants > 10) {
+    toast({
+      title: "오류",
+      description: "참여 인원은 2-10명 사이여야 합니다.",
+      variant: "destructive",
+    });
+    return;
+  }
+
+  setLoading(true);
+  try {
+    const response = await openStudyAPI.createRoom({
+      title: newRoom.title,
+      description: newRoom.description || undefined,
+      studyField: newRoom.studyField,
+      maxParticipants: newRoom.maxParticipants,
+    });
+
+    console.log("방 생성 응답:", response);  // 응답 확인
+    // API 응답 구조에 따라 ID 추출
+    const responseObj = response as any;
+    const roomId =
+      response?.id ||
+      responseObj?.roomId ||
+      responseObj?.data?.id ||
+      responseObj?.data?.roomId;
+
+    if (!roomId) {
       toast({
         title: "오류",
-        description: "방 제목과 공부 분야를 입력해주세요.",
+        description: "방 생성은 완료되었으나 ID를 받지 못했습니다. 목록을 새로고침합니다.",
         variant: "destructive",
       });
-      return;
-    }
-
-    if (newRoom.title.length < 1 || newRoom.title.length > 30) {
-      toast({
-        title: "오류",
-        description: "방 제목은 1-30자 이내여야 합니다.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (newRoom.maxParticipants < 2 || newRoom.maxParticipants > 10) {
-      toast({
-        title: "오류",
-        description: "참여 인원은 2-10명 사이여야 합니다.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await openStudyAPI.createRoom({
-        title: newRoom.title,
-        description: newRoom.description || undefined,
-        studyField: newRoom.studyField,
-        maxParticipants: newRoom.maxParticipants,
-      });
-
-      // API 응답 구조에 따라 ID 추출
-      const responseObj = response as any;
-      const roomId =
-        response?.id || 
-        responseObj?.roomId || 
-        responseObj?.data?.id ||
-        responseObj?.data?.roomId;
-
-      if (!roomId) {
-        toast({
-          title: "오류",
-          description: "방 생성은 완료되었으나 ID를 받지 못했습니다. 목록을 새로고침합니다.",
-          variant: "destructive",
-        });
-        setSelectedField("");
-        await loadRooms(undefined, 1);
-        setCreateDialogOpen(false);
-        setLoading(false);
-        return;
-      }
-
-      // 생성된 방 정보 구성
-      const roomData: OpenStudyRoom = {
-        id: roomId,
-        title: newRoom.title,
-        roomName: newRoom.title,
-        description: newRoom.description,
-        studyField: newRoom.studyField,
-        maxParticipants: newRoom.maxParticipants,
-        currentParticipants: 1,
-        creatorUsername: user.username,
-        createdBy: user.id,
-        isFull: false,
-        createdAt: new Date().toISOString(),
-        ...response,
-      };
-
-      localStorage.setItem("currentOpenStudyRoom", roomId);
-      setCurrentRoom(roomData);
-
-      toast({
-        title: "방 생성 성공",
-        description: `"${newRoom.title}" 방이 생성되었습니다.`,
-      });
-
+      setSelectedField("");
+      await loadRooms(undefined, 1);
       setCreateDialogOpen(false);
-      setNewRoom({
-        title: "",
-        description: "",
-        studyField: "",
-        maxParticipants: 4,
-      });
-
-      // 방으로 바로 이동
-      navigate(`/open-study/room/${roomId}`);
-      
-    } catch (error: any) {
-      const errorMessage = error?.message || "스터디 방 생성에 실패했습니다.";
-      toast({
-        title: "오류",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      setLoading(false);
+      return;
     }
-    setLoading(false);
-  };
+
+    // 생성된 방 정보 구성
+    const roomData: OpenStudyRoom = {
+      id: roomId,
+      title: newRoom.title,
+      roomName: newRoom.title,
+      description: newRoom.description,
+      studyField: newRoom.studyField,
+      maxParticipants: newRoom.maxParticipants,
+      currentParticipants: 1,
+      creatorUsername: user.username,
+      createdBy: user.id,
+      isFull: false,
+      createdAt: new Date().toISOString(),
+      ...response,
+    };
+
+    localStorage.setItem("currentOpenStudyRoom", roomId);
+    setCurrentRoom(roomData);
+
+    toast({
+      title: "방 생성 성공",
+      description: `"${newRoom.title}" 방이 생성되었습니다.`,
+    });
+
+    setCreateDialogOpen(false);
+    setNewRoom({
+      title: "",
+      description: "",
+      studyField: "",
+      maxParticipants: 4,
+    });
+
+    // 방으로 바로 이동
+    navigate(`/open-study/room/${roomId}`);
+    
+  } catch (error: any) {
+    console.error("방 생성 오류:", error);  // 에러 확인
+    toast({
+      title: "오류",
+      description: error?.message || "스터디 방 생성에 실패했습니다.",
+      variant: "destructive",
+    });
+  }
+  setLoading(false);
+};
 
   const handleJoinRoom = async (roomId: number) => {
     if (!user) {
