@@ -1284,7 +1284,7 @@ useEffect(() => {
           id: p.memberId?.toString() || p.id?.toString(),
           username: p.memberId === roomInfo.createdBy 
             ? roomInfo.creatorUsername 
-            : `사용자${p.memberId}`,
+            : p.nickname || `사용자${p.memberId}`,
           status: "studying" as const,
           isCreator: p.memberId === roomInfo.createdBy,
         }));
@@ -1507,7 +1507,7 @@ useEffect(() => {
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">
-                            {participant.username}
+                            {participant.username || `사용자${participant.id}`}
                           </span>
                           {participant.isCreator && (
                             <Badge

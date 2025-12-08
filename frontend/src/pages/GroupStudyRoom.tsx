@@ -674,7 +674,7 @@ const GroupStudyRoomPage: React.FC = () => {
       if (Array.isArray(pList)) {
         const participantList = pList.map((p: any) => ({
           memberId: p.memberId,
-          username: p.memberId === roomInfo.creatorId ? roomInfo.creatorUsername : `사용자${p.memberId}`,
+          username: p.memberId === roomInfo.creatorId ? roomInfo.creatorUsername : p.nickname || `사용자${p.memberId}`,
           profileImageUrl: undefined,
           joinedAt: p.joinedAt,
         }));
