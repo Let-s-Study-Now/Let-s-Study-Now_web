@@ -1642,7 +1642,7 @@ const GroupStudyRoomPage: React.FC = () => {
                               : "bg-gray-400 text-white"
                           }
                         >
-                          {participant.username.charAt(0)?.toUpperCase() || "U"}
+                          {participant.username.charAt(0)?.toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1">
@@ -2254,6 +2254,7 @@ const GroupStudyRoomPage: React.FC = () => {
                                 <div className="flex items-start justify-between mb-2">
                                   <div className="flex items-center gap-2">
                                     <Avatar className="w-6 h-6">
+                                      {renderProfileImage(question.sender, question.senderProfileImage)}
                                       <AvatarFallback className="bg-red-500 text-white text-xs">
                                         {question.sender
                                           ?.charAt(0)
