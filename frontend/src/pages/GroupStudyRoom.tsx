@@ -56,6 +56,7 @@ import {
 interface HelpAnswer {
   id: string;
   answerer: string;
+  answererprofileImage?: string;
   content: string;
   timestamp: Date;
   isAccepted?: boolean;
@@ -65,12 +66,21 @@ interface ChatMessage {
   id: string;
   type: "text" | "system" | "question";
   sender?: string;
+  senderProfileImage?: string;
   content: string;
   timestamp: Date;
   answers?: HelpAnswer[];
   status?: "open" | "helping" | "resolved";
   imageUrl?: string;
   fileName?: string;
+}
+// ✅ 참여자 인터페이스에 profileImage 추가
+interface Participant {
+  id: string;
+  username: string;
+  profileImage?: string;
+  status: "studying" | "resting";
+  isCreator: boolean;
 }
 
 const GroupStudyRoomPage: React.FC = () => {
@@ -91,7 +101,7 @@ const GroupStudyRoomPage: React.FC = () => {
   const [messageInput, setMessageInput] = useState("");
 
   // Participants
-  const [participants, setParticipants] = useState<StudyRoomParticipant[]>([]);
+  const [participants, setParticipants] = useState<Participant[]>([]);
 
   // My Status
   const [myStatus, setMyStatus] = useState<"studying" | "resting">("studying");
@@ -142,6 +152,40 @@ const GroupStudyRoomPage: React.FC = () => {
   // 함수들 (컴포넌트 내부)
   // ==========================================
 
+  // ✅ 이미지 URL 감지 함수
+  const isImageUrl = (text: string) => {
+    if (!text) return false;
+    const imageUrlPattern = /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i;
+    const s3Pattern = /amazonaws\.com.*\.(jpg|jpeg|png|gif|webp|bmp)/i;
+    return imageUrlPattern.test(text) || s3Pattern.test(text);
+  };
+
+  // ✅ 참여자 프로필 이미지 조회
+  const getParticipantProfileImage = (username: string) => {
+    const participant = participants.find(p => p.username === username);
+    return participant?.profileImage;
+  };
+
+  // ✅ 프로필 이미지 렌더링
+  const renderProfileImage = (username: string, fallbackImage?: string) => {
+    // 1순위: 현재 로그인한 사용자
+    if (username === user?.username && user?.profileImage) {
+      return <AvatarImage src={user.profileImage} />;
+    }
+    
+    // 2순위: 참여자 목록에서 조회
+    const participantImage = getParticipantProfileImage(username);
+    if (participantImage) {
+      return <AvatarImage src={participantImage} />;
+    }
+    
+    // 3순위: fallback
+    if (fallbackImage) {
+      return <AvatarImage src={fallbackImage} />;
+    }
+    
+    return null;
+  };
   // WebSocket 메시지 처리
   const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
     console.log("📩 Received:", wsMessage);
@@ -153,7 +197,7 @@ const GroupStudyRoomPage: React.FC = () => {
         type: "question",
         sender: wsMessage.sender,
         content: wsMessage.message,
-        imageUrl: wsMessage.imageUrl,
+        imageUrl: isImageUrl(wsMessage.message) ? wsMessage.message : wsMessage.imageUrl,
         timestamp: new Date(wsMessage.sentAt),
         answers: [],
         status: "open",
@@ -217,7 +261,7 @@ const GroupStudyRoomPage: React.FC = () => {
         type: "text",
         sender: wsMessage.sender,
         content: wsMessage.message,
-        imageUrl: wsMessage.imageUrl,
+        imageUrl: isImageUrl(wsMessage.message) ? wsMessage.message : wsMessage.imageUrl,
         timestamp: new Date(wsMessage.sentAt),
       };
       setMessages((prev) => [...prev, newMsg]);
@@ -251,7 +295,7 @@ const GroupStudyRoomPage: React.FC = () => {
           type: apiMsg.type === "QUESTION" ? "question" : apiMsg.type === "SYSTEM" ? "system" : "text",
           sender: apiMsg.sender,
           content: apiMsg.message,
-          imageUrl: apiMsg.imageUrl,
+          imageUrl: isImageUrl(apiMsg.message) ? apiMsg.message : apiMsg.imageUrl,
           timestamp: new Date(apiMsg.sentAt),
         };
 
@@ -674,8 +718,8 @@ const GroupStudyRoomPage: React.FC = () => {
       if (Array.isArray(pList)) {
         const participantList = pList.map((p: any) => ({
           memberId: p.memberId,
-          username: p.memberId === roomInfo.creatorId ? roomInfo.creatorUsername : p.nickname || `사용자${p.memberId}`,
-          profileImageUrl: undefined,
+          username: p.username || p.nickname || `사용자${p.memberId}`,
+          profileImageUrl: p.profileImage,
           joinedAt: p.joinedAt,
         }));
         
@@ -1199,26 +1243,49 @@ const GroupStudyRoomPage: React.FC = () => {
           console.log("Room data loaded:", roomData);
           setRoomInfo(roomData);
 
-          // 참여자 목록 로드
+          // ✅ 참여자 목록 로드 - profileImage 포함
           try {
             const pList = await studyRoomAPI.getParticipants(roomId);
             console.log("📋 Participants API response:", pList);
             
             if (Array.isArray(pList) && pList.length > 0) {
-              const participantList = pList.map((p: any) => ({
-                memberId: p.memberId,
-                username: p.memberId === roomData.creatorId ? roomData.creatorUsername : `사용자${p.memberId}`,
-                profileImageUrl: undefined,
-                joinedAt: p.joinedAt,
-              }));
+              const participantList = pList.map((p: any) => {
+                const isCreator = p.memberId === roomData.creatorId;
+                
+                return {
+                  id: p.memberId?.toString() || p.id?.toString(),
+                  username: p.username || p.nickname || `사용자${p.memberId}`, // ✅ API의 username 사용!
+                  profileImage: p.profileImage, // ✅ 프로필 이미지 추가!
+                  status: "studying" as const,
+                  isCreator: isCreator,
+                };
+              });
               
-              console.log("✅ Mapped participants:", participantList);
-              setParticipants(participantList as any);
+              console.log("✅ Mapped participants with profiles:", participantList);
+              setParticipants(participantList);
+            } else {
+              // 참여자 목록이 비어있으면 방장만 추가
+              setParticipants([
+                {
+                  id: user?.id?.toString() || "creator",
+                  username: roomData.creatorUsername || user?.username || "방장",
+                  profileImage: user?.profileImage, // ✅ 방장 프로필 추가!
+                  status: "studying",
+                  isCreator: true,
+                },
+              ]);
             }
           } catch (e) {
             console.error("Failed to load participants:", e);
-            // 참여자 로드 실패해도 방 입장은 계속
-            setParticipants([]);
+            setParticipants([
+              {
+                id: user?.id?.toString() || "creator",
+                username: roomData.creatorUsername || user?.username || "방장",
+                profileImage: user?.profileImage, // ✅ 방장 프로필 추가!
+                status: "studying",
+                isCreator: true,
+              },
+            ]);
           }
         } catch (error: any) {
           console.error("Failed to get room info:", error);
@@ -1356,7 +1423,7 @@ const GroupStudyRoomPage: React.FC = () => {
     };
   }, [roomId, user]);
 
-  // 참여자 새로고침 (5초마다)
+  // ✅ 참여자 새로고침 (5초마다) - profileImage 포함
   useEffect(() => {
     if (!roomId || !roomInfo) return;
 
@@ -1365,28 +1432,50 @@ const GroupStudyRoomPage: React.FC = () => {
         const pList = await studyRoomAPI.getParticipants(roomId);
         console.log("🔄 Participants count:", pList.length);
         
-        if (Array.isArray(pList)) {
-          const participantList = pList.map((p: any) => ({
-            memberId: p.memberId,
-            username: p.memberId === roomInfo.creatorId ? roomInfo.creatorUsername : `사용자${p.memberId}`,
-            profileImageUrl: undefined,
-            joinedAt: p.joinedAt,
-          }));
+        if (Array.isArray(pList) && pList.length > 0) {
+          const participantList = pList.map((p: any) => {
+            const isCreator = p.memberId === roomInfo.creatorId;
+            
+            return {
+              id: p.memberId?.toString() || p.id?.toString(),
+              username: p.username || p.nickname || `사용자${p.memberId}`, // ✅ API의 username 사용!
+              profileImage: p.profileImage, // ✅ 프로필 이미지 추가!
+              status: "studying" as const,
+              isCreator: isCreator,
+            };
+          });
           
-          setParticipants(participantList as any);
+          setParticipants(participantList);
+        } else {
+          // 빈 목록이어도 방장은 표시
+          setParticipants([
+            {
+              id: user?.id?.toString() || "creator",
+              username: roomInfo.creatorUsername || user?.username || "방장",
+              profileImage: user?.profileImage, // ✅ 방장 프로필!
+              status: "studying",
+              isCreator: true,
+            },
+          ]);
         }
       } catch (e) {
         console.error("Failed to refresh participants:", e);
+        setParticipants([
+          {
+            id: user?.id?.toString() || "creator",
+            username: roomInfo.creatorUsername || user?.username || "방장",
+            profileImage: user?.profileImage, // ✅ 방장 프로필!
+            status: "studying",
+            isCreator: true,
+          },
+        ]);
       }
     };
 
-    // 즉시 한 번 실행
     refresh();
-
-    // 5초마다 새로고침
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
-  }, [roomId, roomInfo]);
+  }, [roomId, roomInfo, user]);
 
   // 오디오 정리 (컴포넌트 언마운트 시)
   useEffect(() => {
@@ -1399,7 +1488,6 @@ const GroupStudyRoomPage: React.FC = () => {
       }
     };
   }, [audioType]);
-
   // ==========================================
   // JSX 렌더링
   // ==========================================
@@ -1525,9 +1613,9 @@ const GroupStudyRoomPage: React.FC = () => {
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {participants.map((participant) => (
                     <div
-                      key={participant.memberId}
+                      key={participant.id}
                       className={`flex items-center space-x-3 p-2 rounded-lg ${
-                        participant.memberId === roomInfo.creatorId
+                        participant.isCreator
                           ? "bg-yellow-50 border border-yellow-200"
                           : participant.username === user?.username
                           ? "bg-indigo-50 border border-indigo-200"
@@ -1535,14 +1623,14 @@ const GroupStudyRoomPage: React.FC = () => {
                       }`}
                     >
                       <Avatar className="w-8 h-8">
-                        {participant.profileImageUrl ? (
-                          <AvatarImage src={participant.profileImageUrl} />
+                        {participant.profileImage ? (
+                          <AvatarImage src={participant.profileImage} />
                         ) : null}
                         <AvatarFallback
                           className={
-                            participant.memberId === roomInfo.creatorId
+                            participant.isCreator
                               ? "bg-yellow-500 text-white"
-                              : participant.memberId === Number(user?.id)
+                              : participant.username === user?.username
                               ? "bg-indigo-500 text-white"
                               : "bg-gray-400 text-white"
                           }
@@ -1553,9 +1641,9 @@ const GroupStudyRoomPage: React.FC = () => {
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium">
-                            {participant.username || `사용자${participant.memberId}`}
+                            {participant.username || `사용자${participant.id}`}
                           </span>
-                          {participant.memberId === roomInfo.creatorId && (
+                          {participant.isCreator && (
                             <Badge
                               variant="secondary"
                               className="text-xs bg-yellow-100"
@@ -1563,8 +1651,8 @@ const GroupStudyRoomPage: React.FC = () => {
                               방장
                             </Badge>
                           )}
-                          {participant.memberId === Number(user?.id) &&
-                            participant.memberId !== roomInfo.creatorId && (
+                          {participant.username === user?.username &&
+                            !participant.isCreator && (
                               <Badge variant="secondary" className="text-xs">
                                 나
                               </Badge>
@@ -2234,6 +2322,7 @@ const GroupStudyRoomPage: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <div className="flex items-center space-x-2">
                         <Avatar className="w-8 h-8">
+                          {renderProfileImage(message.sender || "", message.senderProfileImage)}
                           <AvatarFallback className="bg-red-500 text-white">
                             {message.sender?.charAt(0).toUpperCase()}
                           </AvatarFallback>
@@ -2437,7 +2526,22 @@ const GroupStudyRoomPage: React.FC = () => {
                         </span>
                       </div>
                       <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
+                        {/* ✅ 이미지 URL이면 이미지 표시, 아니면 텍스트 표시 */}
+                        {message.imageUrl ? (
+                          <img
+                            src={message.imageUrl}
+                            alt="uploaded"
+                            className="max-w-xs rounded cursor-pointer hover:opacity-90 transition-opacity"
+                            onClick={() => window.open(message.imageUrl, '_blank')}
+                            onError={(e) => {
+                              console.error("이미지 로드 실패:", message.imageUrl);
+                              e.currentTarget.style.display = 'none';
+                              e.currentTarget.parentElement!.innerHTML = `<p class="text-gray-900">${message.content}</p>`;
+                            }}
+                          />
+                        ) : (
                         <p className="text-gray-900">{message.content}</p>
+                        )}
                       </div>
                     </div>
                   </div>
