@@ -45,19 +45,29 @@ const Profile: React.FC = () => {
   const [deletePassword, setDeletePassword] = useState("");
 
   useEffect(() => {
+  console.log("=== User 객체 변경 감지 ===");
+  console.log("user:", user);
+  
   if (user) {
     setProfileData({
       bio: user.bio || "",
       studyField: user.studyFields?.[0] || user.studyField || "",
     });
     
-    // ✅ 프로필 이미지 URL 업데이트
     if (user.profileImageUrl) {
-      console.log("프로필 이미지 URL 업데이트:", user.profileImageUrl);
-      setImagePreview(user.profileImageUrl);
+      console.log("Original profileImageUrl:", user.profileImageUrl);
+      
+      // ✅ 캐시 버스팅을 위한 타임스탬프 추가
+      const timestamp = new Date().getTime();
+      const imageUrlWithCache = user.profileImageUrl.includes('?') 
+        ? `${user.profileImageUrl}&t=${timestamp}`
+        : `${user.profileImageUrl}?t=${timestamp}`;
+      
+      console.log("Updated imagePreview:", imageUrlWithCache);
+      setImagePreview(imageUrlWithCache);
     }
   }
-}, [user]); // user 객체가 변경될 때마다 실행
+}, [user]);
 
   // ✅ 레벨 계산 (경험치 기반)
   const calculateLevel = (exp: number = 0) => {
@@ -133,8 +143,7 @@ const handleProfileUpdate = async () => {
       console.log(pair[0], pair[1]);
     }
 
-    // ✅ API 응답을 받아서 처리
-    const response = await authAPI.updateProfile(formData);
+    await authAPI.updateProfile(formData);
 
     toast({
       title: "성공",
@@ -144,11 +153,16 @@ const handleProfileUpdate = async () => {
     // ✅ 사용자 정보 새로고침
     await refreshUser();
     
-    // ✅ 새로고침된 사용자 정보에서 이미지 URL 업데이트
-    // refreshUser가 완료된 후 user 객체가 업데이트되므로
-    // useEffect가 자동으로 실행되어 imagePreview가 업데이트됩니다.
+    // ✅✅ 새로고침 후 user 객체에서 직접 이미지 URL 가져오기
+    // 캐시 버스팅을 위해 타임스탬프 추가
+    const timestamp = new Date().getTime();
+    if (user?.profileImageUrl) {
+      const newImageUrl = user.profileImageUrl.includes('?') 
+        ? `${user.profileImageUrl}&t=${timestamp}`
+        : `${user.profileImageUrl}?t=${timestamp}`;
+      setImagePreview(newImageUrl);
+    }
     
-    // ✅ 임시 파일 상태 초기화
     setProfileImage(null);
 
   } catch (error: any) {
