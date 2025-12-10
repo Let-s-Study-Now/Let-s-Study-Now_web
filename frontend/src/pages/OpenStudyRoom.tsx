@@ -200,25 +200,24 @@ const OpenStudyRoomPage: React.FC = () => {
   return participant?.profileImage;
 };
 
-const getProfileImageUrl = (profileImage?: string) => {
-  if (!profileImage) return "";
-  const timestamp = new Date().getTime();
-  return profileImage.includes('?') 
-    ? `${profileImage}&t=${timestamp}`
-    : `${profileImage}?t=${timestamp}`;
-};
 
 const renderProfileImage = (username: string, fallbackImage?: string) => {
+  // 1순위: 현재 로그인한 사용자
   if (username === user?.username && user?.profileImage) {
-    return <AvatarImage src={getProfileImageUrl(user.profileImage)} />;
+    return <AvatarImage src={user.profileImage} />;
   }
+  
+  // 2순위: 참여자 목록에서 조회
   const participantImage = getParticipantProfileImage(username);
   if (participantImage) {
-    return <AvatarImage src={getProfileImageUrl(participantImage)} />;
+    return <AvatarImage src={participantImage} />;
   }
+  
+  // 3순위: fallback
   if (fallbackImage) {
     return <AvatarImage src={fallbackImage} />;
   }
+  
   return null;
 };
 
@@ -297,7 +296,7 @@ useEffect(() => {
             id: p.memberId?.toString() || p.id?.toString(),
             username: isCreator 
               ? roomInfo.creatorUsername 
-              : p.nickname || `사용자${p.memberId}`,
+              : p.username || `사용자${p.memberId}`,
             profileImage: p.profileImage, // ✅ 프로필 이미지 추가!
             status: "studying" as const,
             isCreator: isCreator,
@@ -615,7 +614,7 @@ useEffect(() => {
                 id: p.memberId?.toString() || p.id?.toString(),
                 username: isCreator 
                   ? roomData.creatorUsername 
-                  : p.nickname || `사용자${p.memberId}`,
+                  : p.username || `사용자${p.memberId}`,
                 profileImage: p.profileImage, // ✅ 프로필 이미지 추가!
                 status: "studying" as const,
                 isCreator: isCreator,
@@ -1369,7 +1368,7 @@ useEffect(() => {
           id: p.memberId?.toString() || p.id?.toString(),
           username: p.memberId === roomInfo.createdBy 
             ? roomInfo.creatorUsername 
-            : p.nickname || `사용자${p.memberId}`,
+            : p.username || `사용자${p.memberId}`,
           status: "studying" as const,
           isCreator: p.memberId === roomInfo.createdBy,
         }));
@@ -1577,6 +1576,9 @@ useEffect(() => {
                       }`}
                     >
                       <Avatar className="w-8 h-8">
+                        {participant.profileImage ? (
+                          <AvatarImage src={participant.profileImage} />
+                        ) : null}
                         <AvatarFallback
                           className={
                             participant.isCreator
