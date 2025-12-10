@@ -81,6 +81,7 @@ interface ChatMessage {
 interface Participant {
   id: string;
   username: string;
+  profileImage?: string; // 프로필 이미지 필드 추가
   status: "studying" | "resting";
   isCreator: boolean;
 }
@@ -194,6 +195,33 @@ const OpenStudyRoomPage: React.FC = () => {
     return `${Math.floor(diff / 86400)}일 전`;
   };
 
+  const getParticipantProfileImage = (username: string) => {
+  const participant = participants.find(p => p.username === username);
+  return participant?.profileImage;
+};
+
+const getProfileImageUrl = (profileImage?: string) => {
+  if (!profileImage) return "";
+  const timestamp = new Date().getTime();
+  return profileImage.includes('?') 
+    ? `${profileImage}&t=${timestamp}`
+    : `${profileImage}?t=${timestamp}`;
+};
+
+const renderProfileImage = (username: string, fallbackImage?: string) => {
+  if (username === user?.username && user?.profileImage) {
+    return <AvatarImage src={getProfileImageUrl(user.profileImage)} />;
+  }
+  const participantImage = getParticipantProfileImage(username);
+  if (participantImage) {
+    return <AvatarImage src={getProfileImageUrl(participantImage)} />;
+  }
+  if (fallbackImage) {
+    return <AvatarImage src={fallbackImage} />;
+  }
+  return null;
+};
+
   // 채팅 스크롤
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -251,39 +279,68 @@ const OpenStudyRoomPage: React.FC = () => {
     };
   }, [audioType]);
 
-    // 참여자 새로고침 (5초마다)
-  useEffect(() => {
-    if (!roomId || !roomInfo) return;
+  // 참여자 새로고침 (5초마다) - profileImage 포함
+useEffect(() => {
+  if (!roomId || !roomInfo) return;
 
-    const refresh = async () => {
-      try {
-        const pList = await openStudyAPI.getParticipants(roomId);
-        console.log("🔄 Participants count:", pList.length);
-        
-        if (Array.isArray(pList)) {
-          const participantList = pList.map((p: any) => ({
-            id: p.memberId?.toString() || p.id?.toString(),
-            username: p.memberId === roomInfo.createdBy 
-              ? roomInfo.creatorUsername 
-              : `사용자${p.memberId}`,
-            status: "studying" as const,
-            isCreator: p.memberId === roomInfo.createdBy,
-          }));
+  const refresh = async () => {
+    try {
+      const pList = await openStudyAPI.getParticipants(roomId);
+      console.log("🔄 Participants count:", pList.length);
+      
+      if (Array.isArray(pList) && pList.length > 0) {
+        // ✅ profileImage 포함하여 매핑
+        const participantList = pList.map((p: any) => {
+          const isCreator = p.memberId === roomInfo.createdBy;
           
-          setParticipants(participantList);
-        }
-      } catch (e) {
-        console.error("Failed to refresh participants:", e);
+          return {
+            id: p.memberId?.toString() || p.id?.toString(),
+            username: isCreator 
+              ? roomInfo.creatorUsername 
+              : p.nickname || `사용자${p.memberId}`,
+            profileImage: p.profileImage, // ✅ 프로필 이미지 추가!
+            status: "studying" as const,
+            isCreator: isCreator,
+          };
+        });
+        
+        console.log("✅ Participants with profiles:", participantList);
+        setParticipants(participantList);
+      } else {
+        // 빈 목록이어도 방장은 표시
+        console.warn("⚠️ Empty participant list, showing creator only");
+        setParticipants([
+          {
+            id: user?.id?.toString() || "creator",
+            username: roomInfo.creatorUsername || user?.username || "방장",
+            profileImage: user?.profileImage, // ✅ 방장 프로필!
+            status: "studying",
+            isCreator: true,
+          },
+        ]);
       }
-    };
+    } catch (e) {
+      console.error("Failed to refresh participants:", e);
+      // API 실패해도 방장은 표시
+      setParticipants([
+        {
+          id: user?.id?.toString() || "creator",
+          username: roomInfo.creatorUsername || user?.username || "방장",
+          profileImage: user?.profileImage, // ✅ 방장 프로필!
+          status: "studying",
+          isCreator: true,
+        },
+      ]);
+    }
+  };
 
-    // 즉시 한 번 실행
-    refresh();
+  // 즉시 한 번 실행
+  refresh();
 
-    // 5초마다 새로고침
-    const interval = setInterval(refresh, 5000);
-    return () => clearInterval(interval);
-  }, [roomId, roomInfo]);
+  // 5초마다 새로고침
+  const interval = setInterval(refresh, 5000);
+  return () => clearInterval(interval);
+}, [roomId, roomInfo, user]); // ✅ user 의존성 추가!
 
   // 뽀모도로 타이머
   useEffect(() => {
@@ -528,206 +585,216 @@ const loadChatHistory = async (roomIdNum: number) => {
   }
 };
 
-  // ✅ 방 입장 로직 개선 - 새로고침 처리 강화
-  useEffect(() => {
-    if (!user || !roomId || hasJoinedRef.current) return;
+  // ✅ 방 입장 로직 개선 - 새로고침 처리 강화 + profileImage 추가
+useEffect(() => {
+  if (!user || !roomId || hasJoinedRef.current) return;
 
-    const joinRoom = async () => {
+  const joinRoom = async () => {
+    try {
+      setLoading(true);
+      console.log("🚪 Attempting to join room:", roomId);
+
+      // 1. 방 정보 조회
+      let roomData: OpenStudyRoom;
       try {
-        setLoading(true);
-        console.log("🚪 Attempting to join room:", roomId);
+        roomData = await openStudyAPI.getRoom(roomId);
+        console.log("✅ Room data loaded:", roomData);
+        setRoomInfo(roomData);
 
-        // 1. 방 정보 조회
-        let roomData: OpenStudyRoom;
+        // 참여자 목록 로드
         try {
-          roomData = await openStudyAPI.getRoom(roomId);
-          console.log("✅ Room data loaded:", roomData);
-          setRoomInfo(roomData);
-
-          // 참여자 목록 로드
-          try {
-            const pList = await openStudyAPI.getParticipants(roomId);
-            console.log("📋 Participants API response:", pList);
-            
-            if (Array.isArray(pList) && pList.length > 0) {
-              const participantList = pList.map((p: any) => ({
-                id: p.memberId?.toString() || p.id?.toString(),
-                username: p.memberId === roomData.createdBy 
-                  ? roomData.creatorUsername 
-                  : `사용자${p.memberId}`,
-                status: "studying" as const,
-                isCreator: p.memberId === roomData.createdBy,
-              }));
+          const pList = await openStudyAPI.getParticipants(roomId);
+          console.log("📋 Participants API response:", pList);
+          
+          if (Array.isArray(pList) && pList.length > 0) {
+            // ✅ profileImage 포함하여 매핑
+            const participantList = pList.map((p: any) => {
+              const isCreator = p.memberId === roomData.createdBy;
               
-              console.log("✅ Mapped participants:", participantList);
-              setParticipants(participantList);
-            } else {
-              // 참여자 목록이 비어있으면 방장만 추가
-              setParticipants([
-                {
-                  id: "creator",
-                  username: roomData.creatorUsername || "방장",
-                  status: "studying",
-                  isCreator: true,
-                },
-              ]);
-            }
-          } catch (e) {
-            console.error("Failed to load participants:", e);
-            // 참여자 로드 실패해도 방 입장은 계속
+              return {
+                id: p.memberId?.toString() || p.id?.toString(),
+                username: isCreator 
+                  ? roomData.creatorUsername 
+                  : p.nickname || `사용자${p.memberId}`,
+                profileImage: p.profileImage, // ✅ 프로필 이미지 추가!
+                status: "studying" as const,
+                isCreator: isCreator,
+              };
+            });
+            
+            console.log("✅ Mapped participants with profiles:", participantList);
+            setParticipants(participantList);
+          } else {
+            // 참여자 목록이 비어있으면 방장만 추가
             setParticipants([
               {
-                id: "creator",
-                username: roomData.creatorUsername || "방장",
+                id: user?.id?.toString() || "creator",
+                username: roomData.creatorUsername || user?.username || "방장",
+                profileImage: user?.profileImage, // ✅ 방장 프로필 추가!
                 status: "studying",
                 isCreator: true,
               },
             ]);
           }
-        } catch (error: any) {
-          console.error("❌ Failed to get room info:", error);
-          toast({
-            title: "오류",
-            description: "방 정보를 불러올 수 없습니다.",
-            variant: "destructive",
-          });
-          navigate("/open-study");
-          return;
-        }
-
-        // 2. 방장 여부 확인
-        const isCreator =
-          roomData.creatorUsername === user.username ||
-          (roomData.createdBy && roomData.createdBy === user.id);
-
-        console.log("👤 User role:", isCreator ? "방장" : "참여자");
-
-        // 3. 비방장만 입장 API 호출 (방장은 이미 입장되어 있음)
-        if (!isCreator) {
-          try {
-            await openStudyAPI.joinRoom(roomId);
-            console.log("✅ Successfully joined room via API");
-          } catch (joinError: any) {
-            const errorMsg = String(joinError?.message || "");
-            console.warn("⚠️ Join room API error:", errorMsg);
-
-            // 이미 참여 중인 경우 (409, "이미", "already" 등)
-            const isAlreadyJoinedError =
-              errorMsg.includes("409") ||
-              errorMsg.includes("이미") ||
-              errorMsg.toLowerCase().includes("already");
-
-            if (isAlreadyJoinedError) {
-              console.log("ℹ️ Already joined - treating as success (refresh scenario)");
-              // 에러를 무시하고 계속 진행 (새로고침 시나리오)
-            } else {
-              // 진짜 에러 (방이 삭제됨, 정원 초과 등)
-              console.error("❌ Real join error:", errorMsg);
-              throw joinError;
-            }
-          }
-
-          // 비방장 자신을 참여자 목록에 추가
-          setParticipants((prev) => [
-            ...prev,
+        } catch (e) {
+          console.error("Failed to load participants:", e);
+          // 참여자 로드 실패해도 방 입장은 계속
+          setParticipants([
             {
-              id: user.id?.toString() || "me",
-              username: user.username,
+              id: user?.id?.toString() || "creator",
+              username: roomData.creatorUsername || user?.username || "방장",
+              profileImage: user?.profileImage, // ✅ 방장 프로필 추가!
               status: "studying",
-              isCreator: false,
+              isCreator: true,
             },
           ]);
         }
-
-        // 4. WebSocket 연결
-        const roomIdNum = parseInt(roomId, 10);
-        webSocketService.connect(
-          () => {
-            console.log("🔌 WebSocket connected successfully");
-            loadChatHistory(roomIdNum);
-            webSocketService.subscribe(roomIdNum, "OPEN", handleWebSocketMessage);
-          },
-          (error) => {
-            console.error("❌ WebSocket connection failed:", error);
-            toast({
-              title: "연결 오류",
-              description: "채팅 서버 연결에 실패했습니다.",
-              variant: "destructive",
-            });
-          }
-        );
-
-        // 5. 스터디 세션 시작
-        try {
-          if (!isNaN(roomIdNum)) {
-            console.log("⏱️ Starting session...");
-            const sessionResponse = await sessionAPI.startSession({
-              studyType: "OPEN_STUDY",
-              roomId: roomIdNum,
-            });
-            console.log("✅ Session started:", sessionResponse);
-
-            setSessionId(sessionResponse.sessionId);
-            setIsSessionActive(true);
-            setCurrentSeconds(0);
-          }
-        } catch (sessionError: any) {
-          const sessionMsg = String(sessionError?.message || "");
-          console.warn("⚠️ Session start error:", sessionMsg);
-
-          // 이미 활성 세션이 있는 경우
-          const isActiveSessionError =
-            sessionMsg.includes("이미") ||
-            sessionMsg.toLowerCase().includes("already active");
-
-          if (isActiveSessionError) {
-            console.log("ℹ️ Already has active session - continuing...");
-            // 세션 에러를 무시하고 계속 진행
-          } else {
-            console.warn("⚠️ Session error (non-critical):", sessionError);
-            // 세션 시작 실패해도 방 입장은 유지
-          }
-        }
-
-        // 6. 로컬 저장소에 현재 방 ID 저장
-        localStorage.setItem("currentOpenStudyRoom", roomId);
-        hasJoinedRef.current = true;
-
-        toast({
-          title: "입장 완료",
-          description: `${roomData.title}에 입장했습니다.`,
-        });
-
-        setLoading(false);
       } catch (error: any) {
-        console.error("❌ Failed to join room:", error);
-
+        console.error("❌ Failed to get room info:", error);
         toast({
-          title: "입장 실패",
-          description: error?.message || "방 입장에 실패했습니다.",
+          title: "오류",
+          description: "방 정보를 불러올 수 없습니다.",
           variant: "destructive",
         });
-
-        // 실패 시 로컬 저장소 정리
-        localStorage.removeItem("currentOpenStudyRoom");
-        setLoading(false);
         navigate("/open-study");
+        return;
       }
-    };
 
-    joinRoom();
+      // 2. 방장 여부 확인
+      const isCreator =
+        roomData.creatorUsername === user.username ||
+        (roomData.createdBy && roomData.createdBy === user.id);
 
-    // Cleanup: WebSocket 연결 해제
-    return () => {
-      if (roomId && hasJoinedRef.current) {
-        const roomIdNum = parseInt(roomId, 10);
-        if (!isNaN(roomIdNum)) {
-          webSocketService.unsubscribe(roomIdNum, "OPEN");
+      console.log("👤 User role:", isCreator ? "방장" : "참여자");
+
+      // 3. 비방장만 입장 API 호출 (방장은 이미 입장되어 있음)
+      if (!isCreator) {
+        try {
+          await openStudyAPI.joinRoom(roomId);
+          console.log("✅ Successfully joined room via API");
+        } catch (joinError: any) {
+          const errorMsg = String(joinError?.message || "");
+          console.warn("⚠️ Join room API error:", errorMsg);
+
+          // 이미 참여 중인 경우 (409, "이미", "already" 등)
+          const isAlreadyJoinedError =
+            errorMsg.includes("409") ||
+            errorMsg.includes("이미") ||
+            errorMsg.toLowerCase().includes("already");
+
+          if (isAlreadyJoinedError) {
+            console.log("ℹ️ Already joined - treating as success (refresh scenario)");
+            // 에러를 무시하고 계속 진행 (새로고침 시나리오)
+          } else {
+            // 진짜 에러 (방이 삭제됨, 정원 초과 등)
+            console.error("❌ Real join error:", errorMsg);
+            throw joinError;
+          }
         }
-        webSocketService.disconnect();
+
+        // 비방장 자신을 참여자 목록에 추가
+        setParticipants((prev) => [
+          ...prev,
+          {
+            id: user.id?.toString() || "me",
+            username: user.username,
+            profileImage: user.profileImage, // ✅ 자신의 프로필 추가!
+            status: "studying",
+            isCreator: false,
+          },
+        ]);
       }
-    };
-  }, [user, roomId, navigate]);
+
+      // 4. WebSocket 연결
+      const roomIdNum = parseInt(roomId, 10);
+      webSocketService.connect(
+        () => {
+          console.log("🔌 WebSocket connected successfully");
+          loadChatHistory(roomIdNum);
+          webSocketService.subscribe(roomIdNum, "OPEN", handleWebSocketMessage);
+        },
+        (error) => {
+          console.error("❌ WebSocket connection failed:", error);
+          toast({
+            title: "연결 오류",
+            description: "채팅 서버 연결에 실패했습니다.",
+            variant: "destructive",
+          });
+        }
+      );
+
+      // 5. 스터디 세션 시작
+      try {
+        if (!isNaN(roomIdNum)) {
+          console.log("⏱️ Starting session...");
+          const sessionResponse = await sessionAPI.startSession({
+            studyType: "OPEN_STUDY",
+            roomId: roomIdNum,
+          });
+          console.log("✅ Session started:", sessionResponse);
+
+          setSessionId(sessionResponse.sessionId);
+          setIsSessionActive(true);
+          setCurrentSeconds(0);
+        }
+      } catch (sessionError: any) {
+        const sessionMsg = String(sessionError?.message || "");
+        console.warn("⚠️ Session start error:", sessionMsg);
+
+        // 이미 활성 세션이 있는 경우
+        const isActiveSessionError =
+          sessionMsg.includes("이미") ||
+          sessionMsg.toLowerCase().includes("already active");
+
+        if (isActiveSessionError) {
+          console.log("ℹ️ Already has active session - continuing...");
+          // 세션 에러를 무시하고 계속 진행
+        } else {
+          console.warn("⚠️ Session error (non-critical):", sessionError);
+          // 세션 시작 실패해도 방 입장은 유지
+        }
+      }
+
+      // 6. 로컬 저장소에 현재 방 ID 저장
+      localStorage.setItem("currentOpenStudyRoom", roomId);
+      hasJoinedRef.current = true;
+
+      toast({
+        title: "입장 완료",
+        description: `${roomData.title}에 입장했습니다.`,
+      });
+
+      setLoading(false);
+    } catch (error: any) {
+      console.error("❌ Failed to join room:", error);
+
+      toast({
+        title: "입장 실패",
+        description: error?.message || "방 입장에 실패했습니다.",
+        variant: "destructive",
+      });
+
+      // 실패 시 로컬 저장소 정리
+      localStorage.removeItem("currentOpenStudyRoom");
+      setLoading(false);
+      navigate("/open-study");
+    }
+  };
+
+  joinRoom();
+
+  // Cleanup: WebSocket 연결 해제
+  return () => {
+    if (roomId && hasJoinedRef.current) {
+      const roomIdNum = parseInt(roomId, 10);
+      if (!isNaN(roomIdNum)) {
+        webSocketService.unsubscribe(roomIdNum, "OPEN");
+      }
+      webSocketService.disconnect();
+    }
+  };
+}, [user, roomId, navigate]);
+
 
   // ✅ 수정된 코드 (새로고침 허용)
 useEffect(() => {
@@ -2150,9 +2217,7 @@ useEffect(() => {
                     <div className="flex items-start justify-between">
                       <div className="flex items-center space-x-2">
                         <Avatar className="w-8 h-8">
-                          {message.senderProfileImage ? (
-                            <AvatarImage src={message.senderProfileImage} />
-                          ) : null}
+                          {renderProfileImage(message.sender, message.senderProfileImage)}
                           <AvatarFallback className="bg-red-500 text-white">
                             {message.sender?.charAt(0).toUpperCase()}
                           </AvatarFallback>
@@ -2329,9 +2394,7 @@ useEffect(() => {
                 ) : (
                   <div className="flex items-start space-x-3">
                     <Avatar className="w-8 h-8">
-                      {message.senderProfileImage ? (
-                        <AvatarImage src={message.senderProfileImage} />
-                      ) : null}
+                      {renderProfileImage(message.sender, message.senderProfileImage)}
                       <AvatarFallback>
                         {message.sender?.charAt(0).toUpperCase()}
                       </AvatarFallback>
