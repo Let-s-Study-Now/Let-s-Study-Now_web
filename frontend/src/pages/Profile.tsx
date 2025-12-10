@@ -54,14 +54,14 @@ const Profile: React.FC = () => {
       studyField: user.studyFields?.[0] || user.studyField || "",
     });
     
-    if (user.profileImageUrl) {
-      console.log("Original profileImageUrl:", user.profileImageUrl);
+    if (user.profileImage) {
+      console.log("Original profileImage:", user.profileImage);
       
       // ✅ 캐시 버스팅을 위한 타임스탬프 추가
       const timestamp = new Date().getTime();
-      const imageUrlWithCache = user.profileImageUrl.includes('?') 
-        ? `${user.profileImageUrl}&t=${timestamp}`
-        : `${user.profileImageUrl}?t=${timestamp}`;
+      const imageUrlWithCache = user.profileImage.includes('?') 
+        ? `${user.profileImage}&t=${timestamp}`
+        : `${user.profileImage}?t=${timestamp}`;
       
       console.log("Updated imagePreview:", imageUrlWithCache);
       setImagePreview(imageUrlWithCache);
@@ -156,10 +156,10 @@ const handleProfileUpdate = async () => {
     // ✅✅ 새로고침 후 user 객체에서 직접 이미지 URL 가져오기
     // 캐시 버스팅을 위해 타임스탬프 추가
     const timestamp = new Date().getTime();
-    if (user?.profileImageUrl) {
-      const newImageUrl = user.profileImageUrl.includes('?') 
-        ? `${user.profileImageUrl}&t=${timestamp}`
-        : `${user.profileImageUrl}?t=${timestamp}`;
+    if (user?.profileImage) {
+      const newImageUrl = user.profileImage.includes('?') 
+        ? `${user.profileImage}&t=${timestamp}`
+        : `${user.profileImage}?t=${timestamp}`;
       setImagePreview(newImageUrl);
     }
     
