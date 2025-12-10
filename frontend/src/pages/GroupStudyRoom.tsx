@@ -1642,7 +1642,7 @@ const GroupStudyRoomPage: React.FC = () => {
                               : "bg-gray-400 text-white"
                           }
                         >
-                          {participant.username.charAt(0)?.toUpperCase()}
+                          {participant.username.charAt(0).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1">

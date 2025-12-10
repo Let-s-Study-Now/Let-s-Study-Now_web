@@ -2295,9 +2295,7 @@ useEffect(() => {
                           >
                             <div className="flex items-center gap-2 mb-2">
                               <Avatar className="w-6 h-6">
-                                {answer.answererProfileImage ? (
-                                  <AvatarImage src={answer.answererProfileImage} />
-                                ) : null}
+                                {renderProfileImage(answer.answerer, answer.answererProfileImage)}
                                 <AvatarFallback className="bg-green-500 text-white text-xs">
                                   {answer.answerer.charAt(0).toUpperCase()}
                                 </AvatarFallback>
