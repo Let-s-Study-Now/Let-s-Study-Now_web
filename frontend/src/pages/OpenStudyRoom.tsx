@@ -336,179 +336,197 @@ const OpenStudyRoomPage: React.FC = () => {
     };
   }, [pomodoroIsRunning, pomodoroTime, pomodoroMode, pomodoroCycle]);
 
-  // WebSocket 메시지 수신 처리
-  const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
-    console.log("📩 WebSocket message received:", wsMessage);
+  // WebSocket 메시지 수신 처리 부분 수정
+const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
+  console.log("📩 WebSocket message received:", wsMessage);
 
-    const messageId = wsMessage.id || wsMessage.messageId || 0;
+  const messageId = wsMessage.id || wsMessage.messageId || 0;
 
-    const newMessage: ChatMessage = {
+  // ✅ 이미지 URL 패턴 감지
+  const isImageUrl = (text: string) => {
+    if (!text) return false;
+    const imageUrlPattern = /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i;
+    const s3Pattern = /amazonaws\.com.*\.(jpg|jpeg|png|gif|webp|bmp)/i;
+    return imageUrlPattern.test(text) || s3Pattern.test(text);
+  };
+
+  const newMessage: ChatMessage = {
+    id: messageId,
+    type: wsMessage.type,
+    sender: wsMessage.sender,
+    senderId: undefined,
+    senderProfileImage: undefined,
+    content: wsMessage.message,
+    // ✅ 이미지 URL 자동 감지
+    imageUrl: isImageUrl(wsMessage.message) ? wsMessage.message : wsMessage.imageUrl,
+    timestamp: new Date(wsMessage.sentAt),
+    refId: wsMessage.refId,
+    isSolved: wsMessage.isSolved,
+  };
+
+  if (wsMessage.type === "QUESTION") {
+    newMessage.status = "open";
+    newMessage.answers = [];
+    console.log("➕ Adding QUESTION message:", newMessage);
+    setMessages((prev) => [...prev, newMessage]);
+    
+  } else if (wsMessage.type === "ANSWER") {
+    console.log("💬 ANSWER received:", {
       id: messageId,
-      type: wsMessage.type,
-      sender: wsMessage.sender,
-      senderId: undefined,
-      senderProfileImage: undefined,
-      content: wsMessage.message,
-      imageUrl: wsMessage.imageUrl,
-      timestamp: new Date(wsMessage.sentAt),
       refId: wsMessage.refId,
-      isSolved: wsMessage.isSolved,
-    };
+      sender: wsMessage.sender,
+      message: wsMessage.message,
+    });
 
-    if (wsMessage.type === "QUESTION") {
-      newMessage.status = "open";
-      newMessage.answers = [];
-      console.log("➕ Adding QUESTION message:", newMessage);
-      setMessages((prev) => [...prev, newMessage]);
-      
-    } else if (wsMessage.type === "ANSWER") {
-      console.log("💬 ANSWER received:", {
-        id: messageId,
-        refId: wsMessage.refId,
-        sender: wsMessage.sender,
-        message: wsMessage.message,
+    if (!wsMessage.refId) {
+      console.error("❌ ANSWER has no refId!");
+      return;
+    }
+
+    setMessages((prev) => {
+      const updated = prev.map((msg) => {
+        if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
+          console.log("✅ Found matching QUESTION:", msg.id);
+
+          const newAnswer: HelpAnswer = {
+            id: messageId,
+            answerer: wsMessage.sender,
+            answererId: undefined,
+            answererProfileImage: undefined,
+            content: wsMessage.message,
+            timestamp: new Date(wsMessage.sentAt),
+            isAccepted: false,
+          };
+
+          console.log("➕ Adding answer to question:", newAnswer);
+
+          return {
+            ...msg,
+            answers: [...(msg.answers || []), newAnswer],
+            status: "helping" as const,
+          };
+        }
+        return msg;
       });
 
-      if (!wsMessage.refId) {
-        console.error("❌ ANSWER has no refId!");
-        return;
-      }
+      console.log("📦 Updated messages:", updated);
+      return updated;
+    });
+    
+  } else if (wsMessage.type === "SOLVE") {
+    console.log("✅ SOLVE message received:", wsMessage);
 
-      setMessages((prev) => {
-        const updated = prev.map((msg) => {
+    if (wsMessage.refId) {
+      setMessages((prev) =>
+        prev.map((msg) => {
           if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
-            console.log("✅ Found matching QUESTION:", msg.id);
-
-            const newAnswer: HelpAnswer = {
-              id: messageId,
-              answerer: wsMessage.sender,
-              answererId: undefined,
-              answererProfileImage: undefined,
-              content: wsMessage.message,
-              timestamp: new Date(wsMessage.sentAt),
-              isAccepted: false,
-            };
-
-            console.log("➕ Adding answer to question:", newAnswer);
-
+            console.log("✅ Marking question as SOLVED:", msg.id);
             return {
               ...msg,
-              answers: [...(msg.answers || []), newAnswer],
-              status: "helping" as const,
+              status: "resolved" as const,
+              isSolved: true,
             };
           }
           return msg;
-        });
-
-        console.log("📦 Updated messages:", updated);
-        return updated;
-      });
-      
-    } else if (wsMessage.type === "SOLVE") {
-      console.log("✅ SOLVE message received:", wsMessage);
-
-      if (wsMessage.refId) {
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
-              console.log("✅ Marking question as SOLVED:", msg.id);
-              return {
-                ...msg,
-                status: "resolved" as const,
-                isSolved: true,
-              };
-            }
-            return msg;
-          })
-        );
-      }
-      
-      addSystemMessage(wsMessage.message);
-      
-    } else if (wsMessage.type === "SYSTEM") {
-      addSystemMessage(wsMessage.message);
-      
-    } else {
-      console.log("➕ Adding TALK message:", newMessage);
-      setMessages((prev) => [...prev, newMessage]);
+        })
+      );
     }
-  };
+    
+    addSystemMessage(wsMessage.message);
+    
+  } else if (wsMessage.type === "SYSTEM") {
+    addSystemMessage(wsMessage.message);
+    
+  } else {
+    console.log("➕ Adding TALK message:", newMessage);
+    setMessages((prev) => [...prev, newMessage]);
+  }
+};
 
-  // 채팅 내역 불러오기
-  const loadChatHistory = async (roomIdNum: number) => {
-    try {
-      const response = await chatAPI.getChatHistory(roomIdNum, "OPEN", 0);
-      
-      console.log("📦 Chat history response:", response);
-      
-      if (!Array.isArray(response)) {
-        console.warn("⚠️ Chat history is not an array:", response);
-        setMessages([]);
-        return;
+  // 채팅 내역 불러오기 함수 수정
+const loadChatHistory = async (roomIdNum: number) => {
+  try {
+    const response = await chatAPI.getChatHistory(roomIdNum, "OPEN", 0);
+    
+    console.log("📦 Chat history response:", response);
+    
+    if (!Array.isArray(response)) {
+      console.warn("⚠️ Chat history is not an array:", response);
+      setMessages([]);
+      return;
+    }
+    
+    if (response.length === 0) {
+      console.log("✅ No chat history found");
+      setMessages([]);
+      return;
+    }
+    
+    // ✅ 이미지 URL 패턴 감지 함수
+    const isImageUrl = (text: string) => {
+      if (!text) return false;
+      const imageUrlPattern = /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i;
+      const s3Pattern = /amazonaws\.com.*\.(jpg|jpeg|png|gif|webp|bmp)/i;
+      return imageUrlPattern.test(text) || s3Pattern.test(text);
+    };
+    
+    const loadedMessages: ChatMessage[] = response.map((apiMsg) => {
+      const baseMessage: ChatMessage = {
+        id: apiMsg.id,
+        type: apiMsg.type,
+        sender: apiMsg.sender,
+        senderId: undefined,
+        senderProfileImage: undefined,
+        content: apiMsg.message,
+        // ✅ 이미지 URL 자동 감지
+        imageUrl: isImageUrl(apiMsg.message) ? apiMsg.message : apiMsg.imageUrl,
+        timestamp: new Date(apiMsg.sentAt),
+        refId: apiMsg.refId,
+        isSolved: apiMsg.isSolved,
+      };
+
+      if (apiMsg.type === "QUESTION") {
+        baseMessage.status = apiMsg.isSolved ? "resolved" : "open";
+        baseMessage.answers = [];
       }
-      
-      if (response.length === 0) {
-        console.log("✅ No chat history found");
-        setMessages([]);
-        return;
-      }
-      
-      const loadedMessages: ChatMessage[] = response.map((apiMsg) => {
-        const baseMessage: ChatMessage = {
-          id: apiMsg.id,
-          type: apiMsg.type,
-          sender: apiMsg.sender,
-          senderId: undefined,
-          senderProfileImage: undefined,
-          content: apiMsg.message,
-          imageUrl: apiMsg.imageUrl,
-          timestamp: new Date(apiMsg.sentAt),
-          refId: apiMsg.refId,
-          isSolved: apiMsg.isSolved,
-        };
 
-        if (apiMsg.type === "QUESTION") {
-          baseMessage.status = apiMsg.isSolved ? "resolved" : "open";
-          baseMessage.answers = [];
-        }
+      return baseMessage;
+    });
 
-        return baseMessage;
-      });
-
-      loadedMessages.forEach((msg) => {
-        if (msg.type === "ANSWER" && msg.refId) {
-          const questionMsg = loadedMessages.find(
-            (m) => m.id === msg.refId && m.type === "QUESTION"
-          );
-          if (questionMsg) {
-            const answer: HelpAnswer = {
-              id: msg.id,
-              answerer: msg.sender,
-              answererId: undefined,
-              answererProfileImage: undefined,
-              content: msg.content,
-              timestamp: msg.timestamp,
-            };
-            if (!questionMsg.answers) questionMsg.answers = [];
-            questionMsg.answers.push(answer);
-            if (questionMsg.answers.length > 0 && !questionMsg.isSolved) {
-              questionMsg.status = "helping";
-            }
+    loadedMessages.forEach((msg) => {
+      if (msg.type === "ANSWER" && msg.refId) {
+        const questionMsg = loadedMessages.find(
+          (m) => m.id === msg.refId && m.type === "QUESTION"
+        );
+        if (questionMsg) {
+          const answer: HelpAnswer = {
+            id: msg.id,
+            answerer: msg.sender,
+            answererId: undefined,
+            answererProfileImage: undefined,
+            content: msg.content,
+            timestamp: msg.timestamp,
+          };
+          if (!questionMsg.answers) questionMsg.answers = [];
+          questionMsg.answers.push(answer);
+          if (questionMsg.answers.length > 0 && !questionMsg.isSolved) {
+            questionMsg.status = "helping";
           }
         }
-      });
+      }
+    });
 
-      const filteredMessages = loadedMessages.filter(
-        (msg) => msg.type !== "ANSWER"
-      );
+    const filteredMessages = loadedMessages.filter(
+      (msg) => msg.type !== "ANSWER"
+    );
 
-      setMessages(filteredMessages);
-      console.log("✅ Chat history loaded:", filteredMessages.length, "messages");
-    } catch (error) {
-      console.error("❌ Failed to load chat history:", error);
-      setMessages([]);
-    }
-  };
+    setMessages(filteredMessages);
+    console.log("✅ Chat history loaded:", filteredMessages.length, "messages");
+  } catch (error) {
+    console.error("❌ Failed to load chat history:", error);
+    setMessages([]);
+  }
+};
 
   // ✅ 방 입장 로직 개선 - 새로고침 처리 강화
   useEffect(() => {
@@ -2329,12 +2347,19 @@ useEffect(() => {
                       </div>
 
                       <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
+                        {/* ✅ imageUrl이 있으면 이미지 표시, 없으면 텍스트 표시 */}
                         {message.imageUrl ? (
                           <img
                             src={message.imageUrl}
                             alt="uploaded"
-                            className="max-w-xs rounded cursor-pointer hover:opacity-90"
-                            onClick={() => window.open(message.imageUrl)}
+                            className="max-w-xs rounded cursor-pointer hover:opacity-90 transition-opacity"
+                            onClick={() => window.open(message.imageUrl, '_blank')}
+                            onError={(e) => {
+                              console.error("이미지 로드 실패:", message.imageUrl);
+                              // 이미지 로드 실패 시 URL 텍스트 표시
+                              e.currentTarget.style.display = 'none';
+                              e.currentTarget.parentElement!.innerHTML = `<p class="text-gray-900">${message.content}</p>`;
+                            }}
                           />
                         ) : (
                           <p className="text-gray-900">{message.content}</p>
