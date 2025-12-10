@@ -56,7 +56,7 @@ import {
 interface HelpAnswer {
   id: string;
   answerer: string;
-  answererprofileImage?: string;
+  answererProfileImage?: string;
   content: string;
   timestamp: Date;
   isAccepted?: boolean;
@@ -715,14 +715,21 @@ const GroupStudyRoomPage: React.FC = () => {
       const pList = await studyRoomAPI.getParticipants(roomId);
       console.log("🔄 Participants refreshed:", pList.length);
       
-      if (Array.isArray(pList)) {
-        const participantList = pList.map((p: any) => ({
-          memberId: p.memberId,
+      if (Array.isArray(pList) && pList.length > 0) {
+        const participantList = pList.map((p: any) => {
+          const isCreator = p.memberId === roomInfo.creatorId;
+
+          return {
+          id: p.merberId?.toString() || p.id?.toString(),
           username: p.username || p.nickname || `사용자${p.memberId}`,
-          profileImageUrl: p.profileImage,
+          profileImage: p.profileImage,
+          status: "studying" as const,
           joinedAt: p.joinedAt,
-        }));
+          isCreator: isCreator,
+          };
+       });
         
+        console.log("✅ Participants with profiles:", participantList);
         setParticipants(participantList as any);
       }
     } catch (error) {
@@ -1635,7 +1642,7 @@ const GroupStudyRoomPage: React.FC = () => {
                               : "bg-gray-400 text-white"
                           }
                         >
-                          {participant.username?.charAt(0)?.toUpperCase() || "U"}
+                          {participant.username.charAt(0)?.toUpperCase() || "U"}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1">
@@ -2322,7 +2329,7 @@ const GroupStudyRoomPage: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <div className="flex items-center space-x-2">
                         <Avatar className="w-8 h-8">
-                          {renderProfileImage(message.sender || "", message.senderProfileImage)}
+                          {renderProfileImage(message.sender, message.senderProfileImage)}
                           <AvatarFallback className="bg-red-500 text-white">
                             {message.sender?.charAt(0).toUpperCase()}
                           </AvatarFallback>
@@ -2406,6 +2413,7 @@ const GroupStudyRoomPage: React.FC = () => {
                               >
                                 <div className="flex items-center gap-2 mb-2">
                                   <Avatar className="w-6 h-6">
+                                    {renderProfileImage(answer.answerer, answer.answererProfileImage)}
                                     <AvatarFallback className="bg-green-500 text-white text-xs">
                                       {answer.answerer.charAt(0).toUpperCase()}
                                     </AvatarFallback>
@@ -2447,6 +2455,7 @@ const GroupStudyRoomPage: React.FC = () => {
                               <div className="flex items-start justify-between gap-2 mb-2">
                                 <div className="flex items-center gap-2">
                                   <Avatar className="w-6 h-6">
+                                    {renderProfileImage(answer.answerer, answer.answererProfileImage)}
                                     <AvatarFallback className="bg-blue-500 text-white text-xs">
                                       {answer.answerer.charAt(0).toUpperCase()}
                                     </AvatarFallback>
@@ -2509,6 +2518,7 @@ const GroupStudyRoomPage: React.FC = () => {
                 ) : (
                   <div className="flex items-start space-x-3">
                     <Avatar className="w-8 h-8">
+                      {renderProfileImage(message.sender, message.senderProfileImage)}
                       <AvatarFallback>
                         {message.sender?.charAt(0).toUpperCase()}
                       </AvatarFallback>
