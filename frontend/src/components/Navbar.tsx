@@ -20,6 +20,15 @@ const Navbar: React.FC = () => {
     return Math.floor(exp / 100) + 1;
   };
 
+  // ✅ 프로필 이미지 URL 가져오기 (캐시 버스팅 적용)
+  const getProfileImageUrl = () => {
+    if (!user?.profileImage) return "";
+    const timestamp = new Date().getTime();
+    return user.profileImage.includes('?') 
+      ? `${user.profileImage}&t=${timestamp}`
+      : `${user.profileImage}?t=${timestamp}`;
+  };
+
   // 사용자 레벨 가져오기
   const userLevel = user?.level || (user?.exp !== undefined ? calculateLevel(user.exp) : 1);
 
@@ -88,12 +97,18 @@ const Navbar: React.FC = () => {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="flex items-center space-x-2">
-                    <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
-                      {user.profileImageUrl ? (
+                    <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center overflow-hidden">
+                      {/* ✅ profileImage로 변경 + 캐시 버스팅 적용 */}
+                      {user.profileImage ? (
                         <img 
-                          src={user.profileImageUrl} 
+                          src={getProfileImageUrl()} 
                           alt="프로필" 
                           className="w-8 h-8 rounded-full object-cover"
+                          onError={(e) => {
+                            // 이미지 로드 실패 시 기본 아이콘 표시
+                            e.currentTarget.style.display = 'none';
+                            e.currentTarget.parentElement!.innerHTML = '<svg class="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>';
+                          }}
                         />
                       ) : (
                         <User className="w-4 h-4 text-gray-600" />
