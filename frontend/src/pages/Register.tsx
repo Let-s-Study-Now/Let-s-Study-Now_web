@@ -141,20 +141,15 @@ const Register: React.FC = () => {
       console.error("에러 메시지:", error?.message);
       console.error("에러 타입:", typeof error);
 
-      // ✅ 백엔드 에러 메시지를 그대로 표시
       let errorMessage = "회원가입에 실패했습니다.";
 
       if (error?.message) {
-        // 백엔드에서 보낸 메시지를 그대로 사용
         errorMessage = error.message;
-
-        // HTTP 상태 코드만 제거
         errorMessage = errorMessage
           .replace(/HTTP error! status: \d+\s*/g, "")
           .trim();
       }
 
-      // 최종 에러 메시지 표시
       console.error("=== 사용자에게 표시할 메시지 ===");
       console.error(errorMessage);
 
@@ -189,14 +184,25 @@ const Register: React.FC = () => {
               {/* 프로필 이미지 업로드 */}
               <div className="flex flex-col items-center space-y-4">
                 <div className="relative">
-                  <Avatar className="w-24 h-24">
-                    <AvatarImage src={imagePreview} />
-                    <AvatarFallback className="text-2xl bg-gray-200">
-                      {formData.username
-                        ? formData.username.charAt(0).toUpperCase()
-                        : "?"}
-                    </AvatarFallback>
-                  </Avatar>
+                  {/* 아바타 자체를 클릭해서 파일 선택 (아래 버튼/문구 제거됨) */}
+                  <Label htmlFor="profile-image" className="cursor-pointer">
+                    <Avatar className="w-24 h-24">
+                      <AvatarImage src={imagePreview} />
+                      <AvatarFallback className="text-2xl bg-gray-200">
+                        {formData.username
+                          ? formData.username.charAt(0).toUpperCase()
+                          : "?"}
+                      </AvatarFallback>
+                    </Avatar>
+                  </Label>
+
+                  <Input
+                    id="profile-image"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleImageChange}
+                  />
 
                   {imagePreview && (
                     <Button
@@ -209,26 +215,6 @@ const Register: React.FC = () => {
                       <X className="h-4 w-4" />
                     </Button>
                   )}
-                </div>
-
-                <div className="text-center">
-                  <Label
-                    htmlFor="profile-image"
-                    className="cursor-pointer inline-flex items-center justify-center h-10 w-10 border border-gray-300 rounded-full shadow-sm bg-white hover:bg-gray-50"
-                    title="프로필 이미지 선택"
-                  >
-                    <Camera className="w-5 h-5 text-gray-700" />
-                  </Label>
-                  <Input
-                    id="profile-image"
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleImageChange}
-                  />
-                  <p className="text-xs text-gray-500 mt-2">
-                    JPG, PNG (최대 5MB)
-                  </p>
                 </div>
               </div>
 
