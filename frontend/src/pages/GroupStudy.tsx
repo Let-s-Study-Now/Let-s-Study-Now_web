@@ -440,21 +440,12 @@ const GroupStudy: React.FC = () => {
     console.log("📥 멤버 데이터:", members);
     
     // ✅ 멤버 데이터 매핑 - username과 profileImage 추출
-    const extendedMembers: ExtendedGroupMember[] = members.map((m: any) => {
-      const apiMember = m as any;
-      console.log("멤버 정보:", {
-        memberId: m.memberId,
-        username: apiMember.username,
-        nickname: apiMember.nickname,
-        profileImage: apiMember.profileImage
-      });
-      
-      return {
-        ...m,
-        username: apiMember.username || apiMember.nickname || `사용자${m.memberId}`,
-        profileImage: apiMember.profileImage
-      };
-    });
+    // ✅ 간단하게 작성
+    const extendedMembers: ExtendedGroupMember[] = members.map((m: any) => ({
+      ...m,
+      username: m.username || m.nickname || `사용자${m.memberId}`,
+      profileImage: m.profileImage
+    }));
     
     setGroupMembers(extendedMembers);
     console.log("✅ 멤버 로딩 완료:", extendedMembers.length);
@@ -838,7 +829,11 @@ const GroupStudy: React.FC = () => {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => loadGroupMembers(group)}
+                          onClick={async () => {
+                            setSelectedGroupForMembers(group);
+                            setMembersDialogOpen(true);
+                            await loadGroupMembers(group);
+                          }}
                           disabled={loadingMembers}
                         >
                           <Users className="w-4 h-4 mr-2" />
@@ -1042,7 +1037,7 @@ const GroupStudy: React.FC = () => {
                   </Button>
                 </div>
               )}
-
+            {/* 멤버 목록*/}
             <div className="border rounded-lg">
               {loadingMembers ? (
                 <div className="p-8 text-center">
@@ -1094,7 +1089,7 @@ const GroupStudy: React.FC = () => {
                             <div className="flex items-center gap-2">
                               {/* ✅ 실제 사용자 이름 표시 */}
                               <span className="font-medium text-gray-900">
-                                {member.username}
+                                {member.username || '사용자${member.memberId}'}
                               </span>
                               {isLeader && (
                                 <Badge
