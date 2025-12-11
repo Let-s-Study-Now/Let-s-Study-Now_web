@@ -294,6 +294,8 @@ export interface GroupMember {
   memberId: number;
   role: string;
   joinedAt: string;
+  username: string;
+  profileImage?: string;
 }
 
 // ✅ 스터디룸 참여자 타입 (Swagger 스펙 기준)
