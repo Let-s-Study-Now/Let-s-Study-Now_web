@@ -718,7 +718,12 @@ const GroupStudyRoomPage: React.FC = () => {
       if (Array.isArray(pList) && pList.length > 0) {
         const participantList = pList.map((p: any) => {
           const isCreator = p.memberId === roomInfo.creatorId;
-
+          console.log("참여자 매핑:", {
+            memberId: p.memberId,
+            username: p.username,
+            nickname: p.nickname,
+            profileImage: p.profileImage
+          });
           return {
           id: p.memberId?.toString() || p.id?.toString(),
           username: p.username || p.nickname || `사용자${p.memberId}`,
@@ -729,8 +734,8 @@ const GroupStudyRoomPage: React.FC = () => {
           };
        });
         
-        console.log("✅ Participants with profiles:", participantList);
-        setParticipants(participantList as any);
+        console.log("✅ 매핑된 참여자:", participantList);
+        setParticipants(participantList);
       }
     } catch (error) {
       console.error("Failed to refresh participants:", error);
@@ -1631,7 +1636,9 @@ const GroupStudyRoomPage: React.FC = () => {
                     >
                       <Avatar className="w-8 h-8">
                         {participant.profileImage ? (
-                          <AvatarImage src={participant.profileImage} />
+                          <AvatarImage 
+                          src={participant.profileImage}
+                          alt={participant.username} />
                         ) : null}
                         <AvatarFallback
                           className={
@@ -1642,7 +1649,7 @@ const GroupStudyRoomPage: React.FC = () => {
                               : "bg-gray-400 text-white"
                           }
                         >
-                          {participant.username.charAt(0).toUpperCase()}
+                          {participant.username?.charAt(0).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1">

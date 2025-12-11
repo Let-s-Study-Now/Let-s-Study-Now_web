@@ -107,63 +107,34 @@ const Register: React.FC = () => {
 
     setLoading(true);
 
-    // ✅ 원본 방식 유지 (프로필 이미지 제외)
-    const payload: any = {
-      email: formData.email,
-      username: formData.username,
-      password: formData.password,
-      checkPassword: formData.confirmPassword,
-      studyField: formData.studyFields[0],
-      checkPw: true,
-    };
-
-    if (formData.bio) {
-      payload.bio = formData.bio;
-    }
-
-    // ❌ 프로필 이미지는 제외 (회원가입 후 별도 업로드)
-    // if (profileImage) {
-    //   payload.profileImageFile = profileImage;
-    // }
-
-    console.log("📤 보낼 데이터:", payload);
-
     try {
-      // ✅ 1단계: 회원가입 (프로필 이미지 없이)
-      const success = await register(payload);
+      // ✅ FormData로 전송 (프로필 이미지 포함)
+      const formDataToSend = new FormData();
+      formDataToSend.append("email", formData.email.trim());
+      formDataToSend.append("username", formData.username.trim());
+      formDataToSend.append("password", formData.password);
+      formDataToSend.append("checkPassword", formData.confirmPassword);
+      formDataToSend.append("studyField", formData.studyFields[0]);
+      formDataToSend.append("checkPw", "true");
+
+      if (formData.bio.trim()) {
+        formDataToSend.append("bio", formData.bio.trim());
+      }
+
+      // ✅ 프로필 이미지 추가
+      if (profileImage) {
+        formDataToSend.append("profileImageFile", profileImage);
+      }
+
+      console.log("📤 회원가입 데이터 전송 (FormData)");
+      console.log("- Email:", formData.email);
+      console.log("- Username:", formData.username);
+      console.log("- StudyField:", formData.studyFields[0]);
+      console.log("- ProfileImage:", profileImage ? profileImage.name : "없음");
+
+      const success = await register(formDataToSend);
       
       if (success) {
-        // ✅ 2단계: 프로필 이미지 업로드 (회원가입 성공 시)
-        if (profileImage) {
-          try {
-            console.log("📤 프로필 이미지 업로드 시작...");
-            
-            const formData = new FormData();
-            formData.append("profileImage", profileImage);
-
-            const token = localStorage.getItem("authToken");
-            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-
-            const imageResponse = await fetch(`${API_BASE_URL}/api/members/profile-image`, {
-              method: "POST",
-              headers: {
-                ...(token ? { "Authorization": `Bearer ${token}` } : {}),
-              },
-              body: formData,
-              credentials: "include",
-            });
-
-            if (imageResponse.ok) {
-              console.log("✅ 프로필 이미지 업로드 성공");
-            } else {
-              console.warn("⚠️ 프로필 이미지 업로드 실패 (회원가입은 성공)");
-            }
-          } catch (imageError) {
-            console.warn("⚠️ 프로필 이미지 업로드 에러:", imageError);
-            // 이미지 업로드 실패해도 회원가입은 성공했으므로 계속 진행
-          }
-        }
-
         setLoading(false);
         alert("회원가입이 완료되었습니다!");
         navigate("/login");
@@ -173,10 +144,8 @@ const Register: React.FC = () => {
     } catch (error: any) {
       setLoading(false);
 
-      console.error("=== 회원가입 에러 상세 ===");
-      console.error("전체 에러 객체:", error);
-      console.error("에러 메시지:", error?.message);
-      console.error("에러 타입:", typeof error);
+      console.error("=== 회원가입 에러 ===");
+      console.error(error);
 
       let errorMessage = "회원가입에 실패했습니다.";
 
@@ -186,9 +155,6 @@ const Register: React.FC = () => {
           .replace(/HTTP error! status: \d+\s*/g, "")
           .trim();
       }
-
-      console.error("=== 사용자에게 표시할 메시지 ===");
-      console.error(errorMessage);
 
       alert(`회원가입 실패\n\n${errorMessage}`);
     }
@@ -259,11 +225,11 @@ const Register: React.FC = () => {
                     onChange={handleImageChange}
                   />
                   <p className="text-xs text-gray-500 mt-2">
-                    JPG, PNG (최대 5MB) - 회원가입 후 자동 업로드
+                    JPG, PNG (최대 5MB)
                   </p>
                   {profileImage && (
                     <p className="text-xs text-green-600 mt-1 font-medium">
-                      ✓ {profileImage.name} 선택됨
+                      ✓ {profileImage.name} ({(profileImage.size / 1024).toFixed(1)}KB)
                     </p>
                   )}
                 </div>

@@ -433,36 +433,36 @@ const GroupStudy: React.FC = () => {
 
   // ✅ 멤버 로드 함수 수정
   const loadGroupMembers = async (group: Group) => {
-    setSelectedGroupForMembers(group);
-    setLoadingMembers(true);
-    try {
-      const members = await groupAPI.getMembers(group.id);
-      console.log("📋 원본 멤버 API 응답:", members);
-      
-      // ✅ API 응답에서 username과 profileImage 추출
-      const extendedMembers: ExtendedGroupMember[] = members.map(m => {
-        const apiMember = m as any;
-        return {
-          ...m,
-          username: apiMember.username || apiMember.nickname || `사용자${m.memberId}`,
-          profileImage: apiMember.profileImage
-        };
+  try {
+    console.log("📥 그룹 멤버 로딩:", group.id);
+    
+    const members = await groupAPI.getMembers(group.id);
+    console.log("📥 멤버 데이터:", members);
+    
+    // ✅ 멤버 데이터 매핑 - username과 profileImage 추출
+    const extendedMembers: ExtendedGroupMember[] = members.map((m: any) => {
+      const apiMember = m as any;
+      console.log("멤버 정보:", {
+        memberId: m.memberId,
+        username: apiMember.username,
+        nickname: apiMember.nickname,
+        profileImage: apiMember.profileImage
       });
       
-      console.log("✅ 확장된 멤버 정보:", extendedMembers);
-      setGroupMembers(extendedMembers);
-      setMembersDialogOpen(true);
-    } catch (error: any) {
-      console.error("멤버 로드 실패:", error);
-      toast({
-        title: "오류",
-        description: error?.message || "멤버 목록을 불러오는데 실패했습니다.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoadingMembers(false);
-    }
-  };
+      return {
+        ...m,
+        username: apiMember.username || apiMember.nickname || `사용자${m.memberId}`,
+        profileImage: apiMember.profileImage
+      };
+    });
+    
+    setGroupMembers(extendedMembers);
+    console.log("✅ 멤버 로딩 완료:", extendedMembers.length);
+  } catch (error) {
+    console.error("❌ 멤버 로딩 실패:", error);
+    setGroupMembers([]);
+  }
+};
 
   const handleRemoveMember = async () => {
     if (!memberToRemove || !selectedGroupForMembers || !user) return;
@@ -1071,7 +1071,10 @@ const GroupStudy: React.FC = () => {
                           {/* ✅ 프로필 이미지 표시 */}
                           <Avatar className="w-10 h-10">
                             {member.profileImage ? (
-                              <AvatarImage src={member.profileImage} />
+                              <AvatarImage 
+                              src={member.profileImage}
+                              alt = {member.username}
+                               />
                             ) : null}
                             <AvatarFallback
                               className={
@@ -1091,7 +1094,7 @@ const GroupStudy: React.FC = () => {
                             <div className="flex items-center gap-2">
                               {/* ✅ 실제 사용자 이름 표시 */}
                               <span className="font-medium text-gray-900">
-                                {member.username || `사용자${member.memberId}`}
+                                {member.username}
                               </span>
                               {isLeader && (
                                 <Badge
@@ -1169,16 +1172,43 @@ const GroupStudy: React.FC = () => {
             <AlertDialogTitle>멤버 추방 확인</AlertDialogTitle>
             <AlertDialogDescription>
               정말로 이 멤버를 그룹에서 추방하시겠습니까?
-              <br />
-              <span className="font-medium text-gray-900 mt-2 block">
-                {/* ✅ 실제 사용자 이름 표시 */}
-                {memberToRemove?.username || `사용자${memberToRemove?.memberId}`}
-              </span>
-              <br />
-              추방된 사용자는 더 이상 해당 그룹의 스터디에 참여하거나 그룹
-              스터디 페이지에 접근할 수 없습니다.
             </AlertDialogDescription>
           </AlertDialogHeader>
+
+          {/* ✅ memberToRemove가 있을 때만 표시 */}
+          {memberToRemove && (
+            <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg my-2">
+              {/* ✅ 프로필 이미지 */}
+              <Avatar className="w-12 h-12">
+                {memberToRemove.profileImage ? (
+                  <AvatarImage 
+                    src={memberToRemove.profileImage}
+                    alt={memberToRemove.username || "프로필"}
+                  />
+                ) : null}
+                <AvatarFallback className="bg-blue-500 text-white">
+                  {memberToRemove.username?.charAt(0)?.toUpperCase() || 
+                  memberToRemove.memberId.toString().charAt(0)}
+                </AvatarFallback>
+              </Avatar>
+
+              {/* ✅ 사용자 정보 */}
+              <div>
+                <span className="font-medium text-gray-900 block text-lg">
+                  {memberToRemove.username || `사용자${memberToRemove.memberId}`}
+                </span>
+                <span className="text-sm text-gray-500">
+                  멤버 ID: {memberToRemove.memberId}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <AlertDialogDescription className="text-red-600">
+            추방된 사용자는 더 이상 해당 그룹의 스터디에 참여하거나 그룹
+            스터디 페이지에 접근할 수 없습니다.
+          </AlertDialogDescription>
+
           <AlertDialogFooter>
             <AlertDialogCancel>취소</AlertDialogCancel>
             <AlertDialogAction
