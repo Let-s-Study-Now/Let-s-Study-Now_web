@@ -107,106 +107,76 @@ const Register: React.FC = () => {
 
     setLoading(true);
 
+    // ✅ 원본 방식 유지 (프로필 이미지 제외)
+    const payload: any = {
+      email: formData.email,
+      username: formData.username,
+      password: formData.password,
+      checkPassword: formData.confirmPassword,
+      studyField: formData.studyFields[0],
+      checkPw: true,
+    };
+
+    if (formData.bio) {
+      payload.bio = formData.bio;
+    }
+
+    // ❌ 프로필 이미지는 제외 (회원가입 후 별도 업로드)
+    // if (profileImage) {
+    //   payload.profileImageFile = profileImage;
+    // }
+
+    console.log("📤 보낼 데이터:", payload);
+
     try {
-      // ✅ 방법 1: JSON 형식으로 시도 (프로필 이미지 제외)
-      const payload = {
-        email: formData.email.trim(),
-        username: formData.username.trim(),
-        password: formData.password,
-        checkPassword: formData.confirmPassword,
-        studyField: formData.studyFields[0],
-        bio: formData.bio.trim() || undefined,
-        checkPw: true,
-      };
-
-      console.log("📤 회원가입 payload (JSON):", payload);
-
-      // 먼저 프로필 이미지 없이 회원가입
-      const response = await fetch(
-        `${import.meta.env.VITE_API_BASE_URL || "http://localhost:8080"}/api/members/register`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-          credentials: "include",
-        }
-      );
-
-      console.log("📥 응답 상태:", response.status);
-
-      if (!response.ok) {
-        let errorMessage = "회원가입에 실패했습니다.";
-        
-        try {
-          const errorData = await response.json();
-          console.error("에러 응답 (JSON):", errorData);
-          
-          if (errorData.message) {
-            errorMessage = errorData.message;
-          } else if (errorData.error) {
-            errorMessage = errorData.error;
-          } else if (typeof errorData === 'string') {
-            errorMessage = errorData;
-          }
-        } catch (e) {
+      // ✅ 1단계: 회원가입 (프로필 이미지 없이)
+      const success = await register(payload);
+      
+      if (success) {
+        // ✅ 2단계: 프로필 이미지 업로드 (회원가입 성공 시)
+        if (profileImage) {
           try {
-            const errorText = await response.text();
-            console.error("에러 응답 (TEXT):", errorText);
+            console.log("📤 프로필 이미지 업로드 시작...");
             
-            if (errorText) {
-              errorMessage = errorText;
-            }
-          } catch (textError) {
-            console.error("에러 텍스트 파싱 실패:", textError);
-          }
-        }
+            const formData = new FormData();
+            formData.append("profileImage", profileImage);
 
-        throw new Error(errorMessage);
-      }
+            const token = localStorage.getItem("authToken");
+            const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-      const result = await response.json();
-      console.log("✅ 회원가입 성공:", result);
-
-      // ✅ 프로필 이미지가 있으면 별도로 업로드
-      if (profileImage && result.id) {
-        console.log("📤 프로필 이미지 업로드 시작...");
-        
-        const imageFormData = new FormData();
-        imageFormData.append("profileImage", profileImage);
-
-        try {
-          const imageResponse = await fetch(
-            `${import.meta.env.VITE_API_BASE_URL || "http://localhost:8080"}/api/members/${result.id}/profile-image`,
-            {
+            const imageResponse = await fetch(`${API_BASE_URL}/api/members/profile-image`, {
               method: "POST",
-              body: imageFormData,
+              headers: {
+                ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+              },
+              body: formData,
               credentials: "include",
+            });
+
+            if (imageResponse.ok) {
+              console.log("✅ 프로필 이미지 업로드 성공");
+            } else {
+              console.warn("⚠️ 프로필 이미지 업로드 실패 (회원가입은 성공)");
             }
-          );
-
-          if (imageResponse.ok) {
-            console.log("✅ 프로필 이미지 업로드 성공");
-          } else {
-            console.warn("⚠️ 프로필 이미지 업로드 실패 (회원가입은 성공)");
+          } catch (imageError) {
+            console.warn("⚠️ 프로필 이미지 업로드 에러:", imageError);
+            // 이미지 업로드 실패해도 회원가입은 성공했으므로 계속 진행
           }
-        } catch (imageError) {
-          console.warn("⚠️ 프로필 이미지 업로드 에러:", imageError);
         }
+
+        setLoading(false);
+        alert("회원가입이 완료되었습니다!");
+        navigate("/login");
+      } else {
+        setLoading(false);
       }
-
-      setLoading(false);
-      alert("회원가입이 완료되었습니다!");
-      navigate("/login");
-
     } catch (error: any) {
       setLoading(false);
 
       console.error("=== 회원가입 에러 상세 ===");
       console.error("전체 에러 객체:", error);
       console.error("에러 메시지:", error?.message);
-      console.error("에러 스택:", error?.stack);
+      console.error("에러 타입:", typeof error);
 
       let errorMessage = "회원가입에 실패했습니다.";
 
@@ -289,11 +259,11 @@ const Register: React.FC = () => {
                     onChange={handleImageChange}
                   />
                   <p className="text-xs text-gray-500 mt-2">
-                    JPG, PNG (최대 5MB) - 회원가입 후 업로드됩니다
+                    JPG, PNG (최대 5MB) - 회원가입 후 자동 업로드
                   </p>
                   {profileImage && (
                     <p className="text-xs text-green-600 mt-1 font-medium">
-                      ✓ {profileImage.name} ({(profileImage.size / 1024).toFixed(1)}KB)
+                      ✓ {profileImage.name} 선택됨
                     </p>
                   )}
                 </div>
