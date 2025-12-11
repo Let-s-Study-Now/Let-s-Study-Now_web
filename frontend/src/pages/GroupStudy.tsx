@@ -57,7 +57,10 @@ const STUDY_FIELDS = [
 // ✅ 확장된 멤버 인터페이스
 interface ExtendedGroupMember extends GroupMember {
   username?: string;
+  nickname?: string;
+  name?: string;
   profileImage?: string;
+  profileImageUrl?: string;
 }
 
 const GroupStudy: React.FC = () => {
@@ -74,10 +77,10 @@ const GroupStudy: React.FC = () => {
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
   const [selectedGroupForMembers, setSelectedGroupForMembers] = useState<Group | null>(null);
-  const [groupMembers, setGroupMembers] = useState<ExtendedGroupMember[]>([]); // ✅ 수정
+  const [groupMembers, setGroupMembers] = useState<ExtendedGroupMember[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [removeMemberDialogOpen, setRemoveMemberDialogOpen] = useState(false);
-  const [memberToRemove, setMemberToRemove] = useState<ExtendedGroupMember | null>(null); // ✅ 수정
+  const [memberToRemove, setMemberToRemove] = useState<ExtendedGroupMember | null>(null);
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<number | "all">("all");
 
   const [newGroup, setNewGroup] = useState({
@@ -132,11 +135,10 @@ const GroupStudy: React.FC = () => {
             setSelectedGroupForMembers(group);
             
             const members = await groupAPI.getMembers(groupId);
-            // ✅ 멤버 정보 확장
-            const extendedMembers = members.map(m => ({
+            const extendedMembers: ExtendedGroupMember[] = members.map((m: any) => ({
               ...m,
-              username: (m as any).username || (m as any).nickname,
-              profileImage: (m as any).profileImage
+              username: m.username || m.nickname || m.name || `사용자${m.memberId}`,
+              profileImage: m.profileImage || m.profileImageUrl || m.profile_image || m.profile_image_url
             }));
             setGroupMembers(extendedMembers);
             setMembersDialogOpen(true);
@@ -174,11 +176,10 @@ const GroupStudy: React.FC = () => {
           setLoadingMembers(true);
           
           const members = await groupAPI.getMembers(groupId);
-          // ✅ 멤버 정보 확장
-          const extendedMembers = members.map(m => ({
+          const extendedMembers: ExtendedGroupMember[] = members.map((m: any) => ({
             ...m,
-            username: (m as any).username || (m as any).nickname,
-            profileImage: (m as any).profileImage
+            username: m.username || m.nickname || m.name || `사용자${m.memberId}`,
+            profileImage: m.profileImage || m.profileImageUrl || m.profile_image || m.profile_image_url
           }));
           setGroupMembers(extendedMembers);
           setMembersDialogOpen(true);
@@ -431,29 +432,50 @@ const GroupStudy: React.FC = () => {
       });
   };
 
-  // ✅ 멤버 로드 함수 수정
+  // ✅ 멤버 로드 함수 수정 - 모든 가능한 필드명 체크
   const loadGroupMembers = async (group: Group) => {
-  try {
-    console.log("📥 그룹 멤버 로딩:", group.id);
-    
-    const members = await groupAPI.getMembers(group.id);
-    console.log("📥 멤버 데이터:", members);
-    
-    // ✅ 멤버 데이터 매핑 - username과 profileImage 추출
-    // ✅ 간단하게 작성
-    const extendedMembers: ExtendedGroupMember[] = members.map((m: any) => ({
-      ...m,
-      username: m.username || m.nickname || `사용자${m.memberId}`,
-      profileImage: m.profileImage
-    }));
-    
-    setGroupMembers(extendedMembers);
-    console.log("✅ 멤버 로딩 완료:", extendedMembers.length);
-  } catch (error) {
-    console.error("❌ 멤버 로딩 실패:", error);
-    setGroupMembers([]);
-  }
-};
+    setLoadingMembers(true);
+    try {
+      console.log("📥 그룹 멤버 로딩 시작:", group.id);
+      
+      const members = await groupAPI.getMembers(group.id);
+      console.log("📥 원본 멤버 데이터:", JSON.stringify(members, null, 2));
+      
+      // ✅ 모든 가능한 필드명을 체크하여 사용자 이름과 프로필 이미지 추출
+      const extendedMembers: ExtendedGroupMember[] = members.map((m: any) => {
+        // 사용자 이름 우선순위: username > nickname > name > memberId
+        const displayName = m.username || m.nickname || m.name || m.user?.username || m.user?.nickname || m.user?.name || `사용자${m.memberId}`;
+        
+        // 프로필 이미지 우선순위: profileImage > profileImageUrl > profile_image > profile_image_url > user.profileImage
+        const profileImg = m.profileImage || m.profileImageUrl || m.profile_image || m.profile_image_url || m.user?.profileImage || m.user?.profileImageUrl || m.user?.profile_image;
+        
+        console.log(`👤 멤버 ${m.memberId} 처리:`, {
+          원본: m,
+          표시이름: displayName,
+          프로필이미지: profileImg
+        });
+        
+        return {
+          ...m,
+          username: displayName,
+          profileImage: profileImg
+        };
+      });
+      
+      console.log("✅ 처리된 멤버 데이터:", extendedMembers);
+      setGroupMembers(extendedMembers);
+    } catch (error) {
+      console.error("❌ 멤버 로딩 실패:", error);
+      toast({
+        title: "오류",
+        description: "멤버 목록을 불러오는데 실패했습니다.",
+        variant: "destructive",
+      });
+      setGroupMembers([]);
+    } finally {
+      setLoadingMembers(false);
+    }
+  };
 
   const handleRemoveMember = async () => {
     if (!memberToRemove || !selectedGroupForMembers || !user) return;
@@ -1037,7 +1059,8 @@ const GroupStudy: React.FC = () => {
                   </Button>
                 </div>
               )}
-            {/* 멤버 목록*/}
+            
+            {/* ✅ 멤버 목록 */}
             <div className="border rounded-lg">
               {loadingMembers ? (
                 <div className="p-8 text-center">
@@ -1067,9 +1090,13 @@ const GroupStudy: React.FC = () => {
                           <Avatar className="w-10 h-10">
                             {member.profileImage ? (
                               <AvatarImage 
-                              src={member.profileImage}
-                              alt = {member.username}
-                               />
+                                src={member.profileImage}
+                                alt={member.username || "프로필"}
+                                onError={(e) => {
+                                  console.log("이미지 로드 실패:", member.profileImage);
+                                  e.currentTarget.style.display = 'none';
+                                }}
+                              />
                             ) : null}
                             <AvatarFallback
                               className={
@@ -1089,7 +1116,7 @@ const GroupStudy: React.FC = () => {
                             <div className="flex items-center gap-2">
                               {/* ✅ 실제 사용자 이름 표시 */}
                               <span className="font-medium text-gray-900">
-                                {member.username || '사용자${member.memberId}'}
+                                {member.username || `사용자${member.memberId}`}
                               </span>
                               {isLeader && (
                                 <Badge
@@ -1157,7 +1184,7 @@ const GroupStudy: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* 멤버 추방 확인 다이얼로그 */}
+      {/* ✅ 멤버 추방 확인 다이얼로그 */}
       <AlertDialog
         open={removeMemberDialogOpen}
         onOpenChange={setRemoveMemberDialogOpen}
@@ -1179,11 +1206,15 @@ const GroupStudy: React.FC = () => {
                   <AvatarImage 
                     src={memberToRemove.profileImage}
                     alt={memberToRemove.username || "프로필"}
+                    onError={(e) => {
+                      console.log("이미지 로드 실패:", memberToRemove.profileImage);
+                      e.currentTarget.style.display = 'none';
+                    }}
                   />
                 ) : null}
                 <AvatarFallback className="bg-blue-500 text-white">
                   {memberToRemove.username?.charAt(0)?.toUpperCase() || 
-                  memberToRemove.memberId.toString().charAt(0)}
+                   memberToRemove.memberId.toString().charAt(0)}
                 </AvatarFallback>
               </Avatar>
 
