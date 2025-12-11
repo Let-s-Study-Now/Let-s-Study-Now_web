@@ -57,9 +57,10 @@ const STUDY_FIELDS = [
 // ✅ 확장된 멤버 인터페이스
 interface ExtendedGroupMember extends GroupMember {
   username?: string;
+  profileImage?: string;
+
   nickname?: string;
   name?: string;
-  profileImage?: string;
   profileImageUrl?: string;
 }
 
@@ -464,90 +465,54 @@ const GroupStudy: React.FC = () => {
       });
   };
 
-  // ✅ 프로필/이름 헬퍼 – OpenStudyRoom 로직 참고
-  const getMemberProfileImage = (member: ExtendedGroupMember) => {
-    // 1순위: 로그인한 본인
-    if (user && Number(user.id) === member.memberId && user.profileImage) {
-      return user.profileImage;
-    }
-    // 2순위: 멤버 데이터에 있는 프로필
-    return (
-      member.profileImage ||
-      member.profileImageUrl ||
-      (member as any).profile_image ||
-      (member as any).profile_image_url
-    );
-  };
+  // ✅ 이름 헬퍼
+const getMemberDisplayName = (member: ExtendedGroupMember) => {
+  // 내가 나일 때는 AuthContext 우선
+  if (user && Number(user.id) === member.memberId && user.username) {
+    return user.username;
+  }
 
-  const getMemberDisplayName = (member: ExtendedGroupMember) => {
-    // 1순위: 로그인한 본인이면 AuthContext의 username 사용
-    if (user && Number(user.id) === member.memberId && user.username) {
-      return user.username;
-    }
-    // 2순위: 멤버 객체에 들어온 이름들
-    return (
-      member.username ||
-      member.nickname ||
-      member.name ||
-      `사용자${member.memberId}`
-    );
-  };
+  // 그 외에는 백엔드에서 내려준 username 사용
+  return member.username || `사용자${member.memberId}`;
+};
 
-  // ✅ 멤버 로드 함수 수정 - 모든 가능한 필드명 체크
+// ✅ 프로필 이미지 헬퍼
+const getMemberProfileImage = (member: ExtendedGroupMember) => {
+  // 나의 프로필은 AuthContext 우선
+  if (user && Number(user.id) === member.memberId && user.profileImage) {
+    return user.profileImage;
+  }
+
+  // 백엔드 응답 값
+  return member.profileImage || member.profileImageUrl;
+};
+
   const loadGroupMembers = async (group: Group) => {
-    setLoadingMembers(true);
-    try {
-      console.log("📥 그룹 멤버 로딩 시작:", group.id);
+  setLoadingMembers(true);
+  try {
+    const members = await groupAPI.getMembers(group.id);
 
-      const members = await groupAPI.getMembers(group.id);
-      console.log("📥 원본 멤버 데이터:", JSON.stringify(members, null, 2));
+    // 이미 username, profileImage 가 들어있지만
+    // 혹시 모를 빈 값 대비해서 한 번 더 기본값만 세팅
+    const extendedMembers: ExtendedGroupMember[] = members.map((m) => ({
+      ...m,
+      username: m.username || `사용자${m.memberId}`,
+      profileImage: m.profileImage,
+    }));
 
-      const extendedMembers: ExtendedGroupMember[] = members.map((m: any) => {
-        const displayName =
-          m.username ||
-          m.nickname ||
-          m.name ||
-          m.user?.username ||
-          m.user?.nickname ||
-          m.user?.name ||
-          `사용자${m.memberId}`;
-
-        const profileImg =
-          m.profileImage ||
-          m.profileImageUrl ||
-          m.profile_image ||
-          m.profile_image_url ||
-          m.user?.profileImage ||
-          m.user?.profileImageUrl ||
-          m.user?.profile_image;
-
-        console.log(`👤 멤버 ${m.memberId} 처리:`, {
-          원본: m,
-          표시이름: displayName,
-          프로필이미지: profileImg,
-        });
-
-        return {
-          ...m,
-          username: displayName,
-          profileImage: profileImg,
-        };
-      });
-
-      console.log("✅ 처리된 멤버 데이터:", extendedMembers);
-      setGroupMembers(extendedMembers);
-    } catch (error) {
-      console.error("❌ 멤버 로딩 실패:", error);
-      toast({
-        title: "오류",
-        description: "멤버 목록을 불러오는데 실패했습니다.",
-        variant: "destructive",
-      });
-      setGroupMembers([]);
-    } finally {
-      setLoadingMembers(false);
-    }
-  };
+    setGroupMembers(extendedMembers);
+  } catch (error) {
+    console.error("❌ 멤버 로딩 실패:", error);
+    toast({
+      title: "오류",
+      description: "멤버 목록을 불러오는데 실패했습니다.",
+      variant: "destructive",
+    });
+    setGroupMembers([]);
+  } finally {
+    setLoadingMembers(false);
+  }
+};
 
   const handleRemoveMember = async () => {
     if (!memberToRemove || !selectedGroupForMembers || !user) return;
