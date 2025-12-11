@@ -54,6 +54,12 @@ const STUDY_FIELDS = [
   "기타",
 ];
 
+// ✅ 확장된 멤버 인터페이스
+interface ExtendedGroupMember extends GroupMember {
+  username?: string;
+  profileImage?: string;
+}
+
 const GroupStudy: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -68,10 +74,10 @@ const GroupStudy: React.FC = () => {
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
   const [selectedGroupForMembers, setSelectedGroupForMembers] = useState<Group | null>(null);
-  const [groupMembers, setGroupMembers] = useState<GroupMember[]>([]);
+  const [groupMembers, setGroupMembers] = useState<ExtendedGroupMember[]>([]); // ✅ 수정
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [removeMemberDialogOpen, setRemoveMemberDialogOpen] = useState(false);
-  const [memberToRemove, setMemberToRemove] = useState<GroupMember | null>(null);
+  const [memberToRemove, setMemberToRemove] = useState<ExtendedGroupMember | null>(null); // ✅ 수정
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<number | "all">("all");
 
   const [newGroup, setNewGroup] = useState({
@@ -107,7 +113,6 @@ const GroupStudy: React.FC = () => {
       }
 
       try {
-        // 1. 그룹 멤버 목록 조회로 이미 멤버인지 확인
         let isAlreadyMember = false;
         try {
           const members = await groupAPI.getMembers(groupId);
@@ -117,19 +122,23 @@ const GroupStudy: React.FC = () => {
         }
 
         if (isAlreadyMember) {
-          // ✅ 이미 멤버인 경우
           toast({
             title: "알림",
             description: "이미 그룹 멤버입니다.",
           });
 
-          // 그룹 정보 조회
           try {
             const group = await groupAPI.getGroup(groupId);
             setSelectedGroupForMembers(group);
             
             const members = await groupAPI.getMembers(groupId);
-            setGroupMembers(members);
+            // ✅ 멤버 정보 확장
+            const extendedMembers = members.map(m => ({
+              ...m,
+              username: (m as any).username || (m as any).nickname,
+              profileImage: (m as any).profileImage
+            }));
+            setGroupMembers(extendedMembers);
             setMembersDialogOpen(true);
           } catch (error) {
             console.error("그룹 정보 조회 실패:", error);
@@ -139,22 +148,18 @@ const GroupStudy: React.FC = () => {
           return;
         }
 
-        // 2. 멤버가 아닌 경우 - 추가 시도
         let addSuccess = false;
         try {
           await groupAPI.addMember(groupId, Number(user.id));
           addSuccess = true;
         } catch (addError: any) {
-          // 400 에러 (이미 멤버) 또는 500 에러 조용히 처리
           console.log("멤버 추가 시도:", addError?.message);
           
-          // 400 에러면 이미 멤버로 간주
           if (addError?.status === 400) {
-            addSuccess = true; // 이미 멤버이므로 성공으로 간주
+            addSuccess = true;
           }
         }
 
-        // 3. 그룹 목록 및 멤버 정보 새로고침
         await loadMyGroups();
         
         try {
@@ -169,7 +174,13 @@ const GroupStudy: React.FC = () => {
           setLoadingMembers(true);
           
           const members = await groupAPI.getMembers(groupId);
-          setGroupMembers(members);
+          // ✅ 멤버 정보 확장
+          const extendedMembers = members.map(m => ({
+            ...m,
+            username: (m as any).username || (m as any).nickname,
+            profileImage: (m as any).profileImage
+          }));
+          setGroupMembers(extendedMembers);
           setMembersDialogOpen(true);
         } catch (error) {
           console.error("그룹 정보 조회 실패:", error);
@@ -197,16 +208,13 @@ const GroupStudy: React.FC = () => {
     handleInviteLink();
   }, [inviteGroupId, user, navigate]);
 
-  // ✅ JWT 기반 그룹 로드
   const loadMyGroups = async () => {
     if (!user) return;
 
     setLoading(true);
     try {
-      // 1. 전체 그룹 조회
       const allGroups = await groupAPI.getAllGroups();
       
-      // 2. 각 그룹의 멤버 확인하여 내가 속한 그룹만 필터링
       const myGroupIds = new Set<number>();
       
       await Promise.all(
@@ -218,17 +226,14 @@ const GroupStudy: React.FC = () => {
               myGroupIds.add(group.id);
             }
           } catch (error) {
-            // 멤버 조회 실패한 그룹은 스킵
             console.warn(`그룹 ${group.id} 멤버 조회 실패`);
           }
         })
       );
 
-      // 3. 내가 속한 그룹만 필터링
       const groups = allGroups.filter((g) => myGroupIds.has(g.id));
       setMyGroups(groups);
 
-      // 4. 각 그룹의 스터디룸 로드
       for (const group of groups) {
         await loadGroupRooms(group.id);
       }
@@ -267,7 +272,6 @@ const GroupStudy: React.FC = () => {
     }
   };
 
-  // ✅ JWT 기반 그룹 생성
   const handleCreateGroup = async () => {
     if (!newGroup.groupName.trim()) {
       toast({
@@ -280,8 +284,6 @@ const GroupStudy: React.FC = () => {
 
     setLoading(true);
     try {
-      // ✅ Swagger 스펙: groupName만 필요
-      // 백엔드에서 생성자를 자동으로 멤버로 추가함
       await groupAPI.createGroup({
         groupName: newGroup.groupName,
       });
@@ -304,7 +306,6 @@ const GroupStudy: React.FC = () => {
     }
   };
 
-  // ✅ JWT 기반 방 생성 (creatorId 제거)
   const handleCreateRoom = async () => {
     if (!newRoom.roomName.trim() || selectedGroupId === null) {
       toast({
@@ -317,7 +318,6 @@ const GroupStudy: React.FC = () => {
 
     setLoading(true);
     try {
-      // ✅ Swagger 스펙: creatorId 제거
       const createdRoom = await studyRoomAPI.createRoom({
         groupId: selectedGroupId,
         roomName: newRoom.roomName,
@@ -350,13 +350,11 @@ const GroupStudy: React.FC = () => {
     }
   };
 
-  // ✅ 그룹 삭제 (userId 파라미터 제거)
   const handleDeleteGroup = async (groupId: number) => {
     if (!confirm("정말로 이 그룹을 삭제하시겠습니까?")) return;
 
     setLoading(true);
     try {
-      // ✅ Swagger 스펙: userId 파라미터 없음
       await groupAPI.deleteGroup(groupId);
       toast({ title: "성공", description: "그룹이 삭제되었습니다." });
       await loadMyGroups();
@@ -433,12 +431,26 @@ const GroupStudy: React.FC = () => {
       });
   };
 
+  // ✅ 멤버 로드 함수 수정
   const loadGroupMembers = async (group: Group) => {
     setSelectedGroupForMembers(group);
     setLoadingMembers(true);
     try {
       const members = await groupAPI.getMembers(group.id);
-      setGroupMembers(members);
+      console.log("📋 원본 멤버 API 응답:", members);
+      
+      // ✅ API 응답에서 username과 profileImage 추출
+      const extendedMembers: ExtendedGroupMember[] = members.map(m => {
+        const apiMember = m as any;
+        return {
+          ...m,
+          username: apiMember.username || apiMember.nickname || `사용자${m.memberId}`,
+          profileImage: apiMember.profileImage
+        };
+      });
+      
+      console.log("✅ 확장된 멤버 정보:", extendedMembers);
+      setGroupMembers(extendedMembers);
       setMembersDialogOpen(true);
     } catch (error: any) {
       console.error("멤버 로드 실패:", error);
@@ -452,17 +464,15 @@ const GroupStudy: React.FC = () => {
     }
   };
 
-  // ✅ 멤버 추방 (requesterId 파라미터 required)
   const handleRemoveMember = async () => {
     if (!memberToRemove || !selectedGroupForMembers || !user) return;
 
     setLoading(true);
     try {
-      // ✅ Swagger 스펙: requesterId는 required 파라미터
       await groupAPI.removeMember(
         selectedGroupForMembers.id,
         memberToRemove.memberId,
-        Number(user.id) // ✅ requesterId 추가
+        Number(user.id)
       );
       toast({
         title: "성공",
@@ -520,7 +530,6 @@ const GroupStudy: React.FC = () => {
           </div>
 
           <div className="flex space-x-3">
-            {/* 새로고침 버튼 */}
             <Button
               variant="ghost"
               size="icon"
@@ -775,7 +784,6 @@ const GroupStudy: React.FC = () => {
                           </CardDescription>
                         </div>
                         <div className="flex space-x-1">
-                          {/* 스터디룸 새로고침 버튼 */}
                           <Button
                             size="sm"
                             variant="ghost"
@@ -846,7 +854,6 @@ const GroupStudy: React.FC = () => {
 
           <TabsContent value="rooms">
             <div className="space-y-6">
-              {/* 그룹 필터 */}
               {myGroups.length > 1 && (
                 <div className="flex items-center gap-3 mb-4">
                   <Label className="text-sm font-medium text-gray-700">
@@ -873,7 +880,6 @@ const GroupStudy: React.FC = () => {
                 </div>
               )}
 
-              {/* 스터디 목록 */}
               {(() => {
                 const filteredGroups =
                   selectedGroupFilter === "all"
@@ -1000,7 +1006,7 @@ const GroupStudy: React.FC = () => {
         </Tabs>
       </div>
 
-      {/* 그룹 멤버 다이얼로그 */}
+      {/* ✅ 그룹 멤버 다이얼로그 - 프로필 이미지와 실제 이름 표시 */}
       <Dialog open={membersDialogOpen} onOpenChange={setMembersDialogOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -1062,7 +1068,11 @@ const GroupStudy: React.FC = () => {
                         className="flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
                       >
                         <div className="flex items-center space-x-3 flex-1">
+                          {/* ✅ 프로필 이미지 표시 */}
                           <Avatar className="w-10 h-10">
+                            {member.profileImage ? (
+                              <AvatarImage src={member.profileImage} />
+                            ) : null}
                             <AvatarFallback
                               className={
                                 isLeader
@@ -1072,13 +1082,16 @@ const GroupStudy: React.FC = () => {
                                   : "bg-gray-400 text-white"
                               }
                             >
-                              {member.memberId.toString().charAt(0)}
+                              {member.username?.charAt(0)?.toUpperCase() || 
+                               member.memberId.toString().charAt(0)}
                             </AvatarFallback>
                           </Avatar>
+                          
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
+                              {/* ✅ 실제 사용자 이름 표시 */}
                               <span className="font-medium text-gray-900">
-                                멤버 #{member.memberId}
+                                {member.username || `사용자${member.memberId}`}
                               </span>
                               {isLeader && (
                                 <Badge
@@ -1158,7 +1171,8 @@ const GroupStudy: React.FC = () => {
               정말로 이 멤버를 그룹에서 추방하시겠습니까?
               <br />
               <span className="font-medium text-gray-900 mt-2 block">
-                멤버 #{memberToRemove?.memberId}
+                {/* ✅ 실제 사용자 이름 표시 */}
+                {memberToRemove?.username || `사용자${memberToRemove?.memberId}`}
               </span>
               <br />
               추방된 사용자는 더 이상 해당 그룹의 스터디에 참여하거나 그룹

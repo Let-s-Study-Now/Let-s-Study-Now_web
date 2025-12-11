@@ -720,7 +720,7 @@ const GroupStudyRoomPage: React.FC = () => {
           const isCreator = p.memberId === roomInfo.creatorId;
 
           return {
-          id: p.merberId?.toString() || p.id?.toString(),
+          id: p.memberId?.toString() || p.id?.toString(),
           username: p.username || p.nickname || `사용자${p.memberId}`,
           profileImage: p.profileImage,
           status: "studying" as const,

@@ -107,30 +107,43 @@ const Register: React.FC = () => {
 
     setLoading(true);
 
-    const payload: any = {
-      email: formData.email,
-      username: formData.username,
-      password: formData.password,
-      checkPassword: formData.confirmPassword,
-      studyField: formData.studyFields[0],
-      checkPw: true,
-    };
-
-    if (formData.bio) {
-      payload.bio = formData.bio;
-    }
-
-    if (profileImage) {
-      payload.profileImageFile = profileImage;
-    }
-
-    console.log("📤 보낼 데이터:", payload);
-
     try {
-      const success = await register(payload);
+      // ✅ FormData 방식으로 변경
+      const formDataToSend = new FormData();
+      
+      // 필수 필드
+      formDataToSend.append("email", formData.email);
+      formDataToSend.append("username", formData.username);
+      formDataToSend.append("password", formData.password);
+      formDataToSend.append("checkPassword", formData.confirmPassword);
+      formDataToSend.append("studyField", formData.studyFields[0]);
+      formDataToSend.append("checkPw", "true");
+
+      // 선택 필드
+      if (formData.bio) {
+        formDataToSend.append("bio", formData.bio);
+      }
+
+      // ✅ 프로필 이미지 파일 추가
+      if (profileImage) {
+        formDataToSend.append("profileImageFile", profileImage);
+        console.log("✅ 프로필 이미지 추가:", profileImage.name, profileImage.size);
+      }
+
+      console.log("📤 FormData 내용:");
+      for (const [key, value] of formDataToSend.entries()) {
+        if (value instanceof File) {
+          console.log(`${key}:`, value.name, `(${value.size} bytes)`);
+        } else {
+          console.log(`${key}:`, value);
+        }
+      }
+
+      const success = await register(formDataToSend);
       setLoading(false);
 
       if (success) {
+        alert("회원가입이 완료되었습니다!");
         navigate("/login");
       }
     } catch (error: any) {
@@ -229,6 +242,12 @@ const Register: React.FC = () => {
                   <p className="text-xs text-gray-500 mt-2">
                     JPG, PNG (최대 5MB)
                   </p>
+                  {/* ✅ 선택된 이미지 표시 */}
+                  {profileImage && (
+                    <p className="text-xs text-green-600 mt-1 font-medium">
+                      ✓ {profileImage.name} ({(profileImage.size / 1024).toFixed(1)}KB)
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -322,7 +341,7 @@ const Register: React.FC = () => {
                       {showConfirmPassword ? (
                         <EyeOff className="h-4 w-4 text-gray-400" />
                       ) : (
-                        <Eye className="h-4 w-4 text-gray-400" />
+                        <Eye className="h-4 h-4 text-gray-400" />
                       )}
                     </Button>
                   </div>
