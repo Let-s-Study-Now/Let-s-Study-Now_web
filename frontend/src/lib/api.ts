@@ -303,6 +303,7 @@ export interface StudyRoomParticipant {
   id: number; // ✅ Swagger 스펙에 있음
   memberId: number;
   username?: string; // ✅ API 응답에 없음 (별도 조회 필요)
+  profileImage?: string;
   profileImageUrl?: string;
   timerStatus?: "STUDYING" | "RESTING";
   joinedAt: string;

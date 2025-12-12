@@ -56,5 +56,3 @@ src/
 ├── lib/           # Utility Library
 └── main.tsx       # Application Entry Point
 ```
-
-test7
